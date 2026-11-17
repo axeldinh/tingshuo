@@ -115,4 +115,111 @@ t('a veteran placed at HSK 3 also meets every lower-level word', () => {
   const v = srs.vocab(window.WORDS);
   [1, 2].forEach(l => assert.strictEqual(v[l].met, v[l].total, `HSK ${l}: ${v[l].met}/${v[l].total}`));
 });
+// ---- conversations: scene data and the scripted engine ----
+require('../docs/data/dialogues.js');
+const DLG = require('../docs/js/dialogue.js');
+const SC = window.DIALOGUES, scene = id => SC.find(s => s.id === id);
+const levelChars = l => new Set(window.WORDS.filter(w => w.l <= l).flatMap(w => [...w.h]));
+t('scenes: 4 per HSK level, every one valid (reachable, no dead ends or loops)', () => {
+  [1, 2, 3].forEach(l => assert.strictEqual(SC.filter(s => s.l === l).length, 4, 'HSK ' + l));
+  SC.forEach(s => assert.deepStrictEqual(DLG.validateScene(s).errors, [], s.id));
+});
+t('scenes: only characters of their HSK level', () => {
+  const chars = { 1: levelChars(1), 2: levelChars(2), 3: levelChars(3) };
+  SC.forEach(s => assert.deepStrictEqual(DLG.validateScene(s, { chars }).warnings, [], s.id));
+});
+t('scenes: every route ends after 6-8 replies', () => SC.forEach(s => {
+  const ps = DLG.paths(s); assert(ps.length >= 2, s.id + ' branches');
+  ps.forEach(p => assert(p.length >= 6 && p.length <= 8, `${s.id}: ${p.length} replies`));
+}));
+t('scenes: 2+ replies per line, 3 distractors each, all glossed', () => SC.forEach(s => Object.values(s.nodes).forEach(n => {
+  assert(n.zh && n.en, n.id);
+  if (n.end) return;
+  assert(n.replies.length >= 2, n.id);
+  n.replies.forEach(r => { assert(r.en && r.sy.length, r.id); assert.strictEqual(r.d.length, 3, r.id); r.d.forEach(d => assert(d.why && DLG.norm(d.zh) !== DLG.norm(r.zh), r.id)); });
+})));
+t('scenes: reply ids are unique and carry their level', () => {
+  const items = DLG.replyItems(SC); assert.strictEqual(new Set(items.map(r => r.id)).size, items.length);
+  items.forEach(r => assert.strictEqual(r.l, scene(r.scene).l));
+});
+t('validateScene catches dead ends, unreachable nodes, loops, missing glosses, distractor = reply', () => {
+  const r = (zh, next, d = [['错一', 'x'], ['错二', 'x'], ['错三', 'x']]) => ({ id: zh, zh, en: 'e', next, sy: [], alt: [], d: d.map(([zh, why]) => ({ zh, why, sy: [] })) });
+  const base = () => ({ id: 't', l: 1, title: '好', en: 'e', who: 'w', intro: 'i', start: 'a', nodes: {
+    a: { zh: '你好', en: 'hi', replies: [r('好一', 'b'), r('好二', 'b')] }, b: { zh: '再见', en: 'bye', end: true, replies: [] } } });
+  assert.deepStrictEqual(DLG.validateScene(base()).errors, []);
+  const dead = base(); dead.nodes.b = { zh: '再见', en: 'bye', replies: [] };
+  assert(/dead end/.test(DLG.validateScene(dead).errors.join()));
+  const lost = base(); lost.nodes.c = { zh: '谁', en: 'who', end: true, replies: [] };
+  assert(/can't be reached/.test(DLG.validateScene(lost).errors.join()));
+  const loop = base(); loop.nodes.a.replies[0].next = 'a';
+  assert(/loop/.test(DLG.validateScene(loop).errors.join()));
+  const nogloss = base(); nogloss.nodes.a.replies[1].en = '';
+  assert(/English/.test(DLG.validateScene(nogloss).errors.join()));
+  const same = base(); same.nodes.a.replies[0].d[0] = { zh: '好二！', why: 'x', sy: [] };
+  assert(/is an accepted reply/.test(DLG.validateScene(same).errors.join()));
+  const missing = base(); missing.nodes.a.replies[0].next = 'zz';
+  assert(/missing node/.test(DLG.validateScene(missing).errors.join()));
+});
+const E = new DLG.ScriptedEngine(), food = scene('food');
+t('engine: start gives the first line, its replies and their distractors', () => {
+  const tn = E.start(food, {});
+  assert.strictEqual(tn.line.zh, food.nodes[food.start].zh); assert(!tn.end);
+  assert.strictEqual(tn.options.length, food.nodes.hi.replies.length);
+  assert.strictEqual(tn.distractors.length, tn.options.length * 3); assert(tn.distractors.every(d => d.why && d.of));
+  assert.strictEqual(tn.left, 6);
+});
+t('engine: options the learner has due come first', () => {
+  const second = food.nodes.hi.replies[1];
+  assert.strictEqual(E.start(food, { due: new Set([second.id]) }).options[0].id, second.id);
+});
+t('engine: a tapped reply moves the scene on', () => {
+  const r = food.nodes.sit.replies[1];
+  const tn = E.reply(E.start(food, {}).state, { text: food.nodes.hi.replies[0].zh, via: 'choice' });
+  assert.strictEqual(tn.feedback.q, 2); assert.strictEqual(tn.state.node, 'sit'); assert.strictEqual(tn.left, 5);
+  const t2 = E.reply(tn.state, { text: r.zh, via: 'choice' });
+  assert.strictEqual(t2.state.node, r.next); assert.strictEqual(t2.state.history.length, 2);
+});
+t('engine: a tapped distractor is graded 0 and corrected to its reply', () => {
+  const r = food.nodes.hi.replies[1], d = r.d[0];
+  const tn = E.reply(E.start(food, {}).state, { text: d.zh, via: 'choice' });
+  assert.strictEqual(tn.feedback.q, 0); assert.strictEqual(tn.feedback.distractor.zh, d.zh);
+  assert.strictEqual(tn.feedback.correction.id, r.id); assert.strictEqual(tn.state.node, r.next);
+});
+t('engine: typed characters, pinyin and alternatives are matched', () => {
+  const st = E.start(food, {}).state;
+  assert.strictEqual(E.reply(st, { text: '三个人', via: 'typed' }).feedback.matched.zh, '三个人。');
+  const py = E.reply(st, { text: 'san1 ge4 ren2', via: 'typed' }).feedback; assert(py.exact); assert.strictEqual(py.q, 3);
+  const alt = E.reply(st, { text: '我们三个人', via: 'typed' }).feedback; assert(alt.exact); assert.strictEqual(alt.matched.zh, '三个人。'); assert.strictEqual(alt.form.zh, '我们三个人。');
+});
+t('engine: a typed near miss gets q 1 and a correction; a typed distractor gets its reason', () => {
+  const st = E.start(scene('fruit'), {}).state;
+  const near = E.reply(st, { text: '我想买苹', via: 'typed' }).feedback; assert.strictEqual(near.q, 1); assert(near.correction);
+  const miss = E.reply(st, { text: '我买想苹果', via: 'typed' }).feedback; assert.strictEqual(miss.q, 0); assert(/想 goes before/.test(miss.distractor.why));
+  assert.strictEqual(E.reply(st, { text: '我想买苹果', via: 'typed', helped: true }).feedback.q, 1);
+});
+t('engine: speech is matched with compareSpeech; a near match is recast, noise is retried', () => {
+  const st = E.start(scene('ticket'), {}).state;
+  const ok = E.reply(st, { text: '您好我去北京', via: 'speech' }).feedback; assert.strictEqual(ok.q, 2); assert(ok.exact);
+  const near = E.reply(st, { text: '您好我去背景', via: 'speech' }); // 北京 běijīng heard as 背景 bèijǐng
+  assert.strictEqual(near.feedback.q, 1); assert(near.feedback.correction); assert.strictEqual(near.state.node, 'when');
+  assert(near.feedback.heard.syl.some(s => s.st === 'tone'));
+  const noise = E.reply(st, { text: '天气很好', via: 'speech' });
+  assert(noise.feedback.retry); assert.strictEqual(noise.feedback.q, null); assert.strictEqual(noise.state, st);
+  const wrong = E.reply(st, { text: '您好我来北京', via: 'speech' }).feedback; // the 来/去 distractor, said cleanly
+  assert.strictEqual(wrong.q, 0); assert(/来 = come/.test(wrong.distractor.why));
+});
+t('engine: every route of every scene plays to the end', () => SC.forEach(s => DLG.paths(s).forEach(p => {
+  let tn = E.start(s, {});
+  for (const id of p) { const r = tn.options.find(o => o.id === id); tn = E.reply(tn.state, { text: r.zh, via: 'choice' }); }
+  assert(tn.end, s.id); assert.strictEqual(tn.left, 0); assert.strictEqual(tn.options.length, 0);
+  assert.throws(() => E.reply(tn.state, { text: '好', via: 'typed' }));
+})));
+t('converse mode: graded replies count as words met, without touching other modes', () => {
+  const { srs } = fresh(); const items = attachWords(DLG.replyItems(SC), window.WORDS);
+  const r = scene('doctor').nodes.hi.replies[0]; assert(r.w.includes('发烧'));
+  srs.grade('converse', r.id, 2);
+  assert(srs.metWords().has('发烧'));
+  assert.strictEqual(srs.counts('listen', window.SENTENCES).due, 0);
+  assert.strictEqual(srs.counts('converse', items).level, 1);
+});
 console.log(n, 'tests passed');
