@@ -7,6 +7,7 @@
   const SENT = window.SENTENCES;
   const WORDS = window.WORDS.filter(w => [...w.h].length <= 4);
   const WORDSET = new Set(window.WORDS.map(w => w.h));
+  attachWords(SENT, window.WORDS); attachWords(WORDS, window.WORDS); // lets sessions track which words you've met
   const view = document.getElementById('view');
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
@@ -265,8 +266,13 @@
     const s = session; if (!s) return route();
     TTS.stop(); session = null;
     const ups = [];
-    for (const m of s.modes) { const up = srs.checkLevelUp(m, MODES[m].pool()); if (up) ups.push([m, up]); }
+    const downs = [];
+    for (const m of s.modes) {
+      const up = srs.checkLevelUp(m, MODES[m].pool()); if (up) { ups.push([m, up]); continue; }
+      const down = srs.checkLevelDown(m, MODES[m].pool()); if (down) downs.push([m, down]);
+    }
     if (ups.length) return chapterPage(ups[0][1], ups.map(u => MODES[u[0]].title));
+    if (downs.length) toast(`${downs.map(d => MODES[d[0]].title).join(', ')}: back to HSK ${downs[0][1]} for a while. Your reviews stay.`, 5000);
     const ok = s.results.filter(q => q > 0).length, n = s.results.length;
     view.innerHTML = `<div class="stage fadein" style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:16px">
       <p class="eyebrow">${esc(s.title)}</p>
@@ -514,33 +520,41 @@
   };
 
   // ---------------- placement ----------------
+  // Staged and adaptive: four sentences per level, moving up only after 3 of 4 right.
+  // A beginner is done after four questions; a veteran answers twelve. "Not sure" stops lucky guesses.
   function startPlacement() {
-    const pick = l => shuffle(SENT.filter(s => s.l === l)).slice(0, 3);
-    const items = [...pick(1), ...pick(2), ...pick(3)], res = [];
+    const PER = 4, PASS = 3, res = [];
+    const pick = l => shuffle(SENT.filter(s => s.l === l)).slice(0, PER);
+    let lvl = 1, items = pick(1), i = 0;
     document.body.classList.remove('tabbed');
-    let i = 0;
+    const finish = placed => {
+      Object.keys(MODES).forEach(m => srs.setLevel(m, placed));
+      store.put('meta', 'placement', { done: Date.now(), level: placed });
+      view.innerHTML = `<div class="stage fadein" style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:14px"><p class="eyebrow">Placement</p>
+        <p class="title-zh" style="font-size:56px">HSK ${placed}</p><p class="lede">${res.filter(r => r.ok).length} of ${res.length} right.
+        ${placed > 1 ? 'Words from earlier levels still come up now and then, so nothing is skipped. If this level is too hard, the app steps back by itself.' : 'The next level unlocks by itself once this one is solid.'}</p>
+        <div class="spacer"></div><a class="btn solid block" href="#home">Begin</a></div>`;
+    };
     const show = () => {
       if (i >= items.length) {
-        const ok = l => res.filter(r => r.l === l && r.ok).length;
-        let lvl = 1; if (ok(1) >= 2 && ok(2) >= 2) lvl = 2; if (lvl === 2 && ok(3) >= 2) lvl = 3;
-        Object.keys(MODES).forEach(m => srs.setLevel(m, lvl));
-        store.put('meta', 'placement', { done: Date.now(), level: lvl });
-        view.innerHTML = `<div class="stage fadein" style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:14px"><p class="eyebrow">Placement</p>
-          <p class="title-zh" style="font-size:56px">HSK ${lvl}</p><p class="lede">${res.filter(r => r.ok).length} of ${res.length} right. Earlier levels stay open; the next unlocks by itself.</p>
-          <div class="spacer"></div><a class="btn solid block" href="#home">Begin</a></div>`;
-        return;
+        const ok = res.filter(r => r.l === lvl && r.ok).length;
+        if (ok < PASS || lvl === 3) return finish(ok >= PASS ? 3 : lvl);
+        lvl++; items = pick(lvl); i = 0;
       }
-      const it = items[i];
+      const it = items[i], n = res.length, total = n + (items.length - i) + (3 - lvl) * PER;
       const opts = shuffle([{ zh: it.zh, sy: it.sy, right: true }, ...it.d]);
-      view.innerHTML = `<div class="progressbar"><a class="icon-btn" href="#home" aria-label="Leave">${ICON.close}</a><div class="track"><div style="width:${i / items.length * 100}%"></div></div><span class="small muted">${i + 1} / ${items.length}</span></div>
+      view.innerHTML = `<div class="progressbar"><a class="icon-btn" href="#home" aria-label="Leave">${ICON.close}</a><div class="track"><div style="width:${n / total * 100}%"></div></div><span class="small muted">HSK ${lvl}</span></div>
         <div class="stage" style="padding-top:40px"><p class="eyebrow">Find your level · which did you hear?</p>${playRow()}
-        <div class="opts">${opts.map((o, k) => `<button class="opt" data-o="${k}">${sentHTML(o.sy, { small: true, pinyin: true })}<span class="tag"></span></button>`).join('')}</div></div>`;
+        <div class="opts">${opts.map((o, k) => `<button class="opt" data-o="${k}">${sentHTML(o.sy, { small: true, pinyin: true })}<span class="tag"></span></button>`).join('')}</div>
+        <button class="linkbtn" data-unsure style="margin-top:14px">Not sure</button></div>`;
       wirePlay(view, it.zh);
-      $$('[data-o]').forEach(b => b.onclick = () => {
-        const ok = opts[+b.dataset.o].right; res.push({ l: it.l, ok }); store.log({ type: 'placement', item: it.id, ok });
-        b.classList.add('picked'); $$('[data-o]').forEach(bb => bb.disabled = true);
+      const answer = (ok, b) => {
+        res.push({ l: it.l, ok }); store.log({ type: 'placement', item: it.id, ok });
+        if (b) b.classList.add('picked'); $$('[data-o]').forEach(bb => bb.disabled = true);
         setTimeout(() => { i++; show(); }, 450);
-      });
+      };
+      $$('[data-o]').forEach(b => b.onclick = () => answer(opts[+b.dataset.o].right, b));
+      $('[data-unsure]').onclick = () => answer(false);
       say(it.zh);
     };
     show();
@@ -563,7 +577,7 @@
         <a class="icon-btn" href="#settings" aria-label="Settings">${ICON.gear}</a></div>
       <div style="margin-top:34px"><p class="title-zh">${greet}</p><p class="lede">${en}. ${due ? due + ' items are waiting.' : 'Nothing due — a good day for new sentences.'}</p></div>
       ${warn.map(w => `<p class="notice">${esc(w)}</p>`).join('')}
-      ${!placement ? `<div class="note"><p>New here? Nine listening questions find your level. <button class="linkbtn" data-place style="color:var(--seal)">Find my level</button> <button class="linkbtn" data-skip>Start at HSK 1</button></p></div>` : ''}
+      ${!placement ? `<div class="note"><p>New here? A few listening questions find your level. <button class="linkbtn" data-place style="color:var(--seal)">Find my level</button> <button class="linkbtn" data-skip>Start at HSK 1</button></p></div>` : ''}
       <button class="begin" data-mix><span class="zh">练</span><b>Begin</b><span class="small muted">${setting('size')} items · all skills</span></button>
       <div class="rows">${Object.entries(MODES).map(([m, M]) => `<button data-mode="${m}"><span>${M.title}<span class="sub">${M.sub}</span></span><span class="r">${counts[m].due ? counts[m].due + ' due · ' : ''}HSK ${counts[m].level}</span></button>`).join('')}</div>`;
     $('[data-mix]').onclick = startMix;
@@ -587,6 +601,8 @@
       <p class="tiny muted" style="margin:0">Darker ink, more practice. ${st.streak ? st.streak + '-day streak · ' : ''}${st.total} answers in all.</p>
       <p class="eyebrow" style="margin-top:28px;color:var(--ink2)">Tones</p>
       <div class="tonebars">${st.toneAcc.map(t => `<div>${brushSVG(t.t, 64, 28, 6)}<b>${t.n ? Math.round(t.ok / t.n * 100) + '%' : '–'}</b><span>${TONE_WORD[t.t]}</span></div>`).join('')}</div>
+      <p class="eyebrow" style="margin-top:28px;color:var(--ink2)">Vocabulary</p>
+      <div class="rows">${Object.entries(srs.vocab(window.WORDS)).map(([l, v]) => `<div><span>HSK ${l} words met</span><span class="r">${v.met} / ${v.total}</span></div>`).join('')}</div>
       <p class="eyebrow" style="margin-top:28px;color:var(--ink2)">Levels</p>
       <div class="rows">${Object.entries(MODES).map(([m, M]) => { const c = srs.counts(m, M.pool()); return `<div><span>${M.title}</span><span class="r">HSK ${c.level} · ${c.learned} learned</span></div>`; }).join('')}</div>
       <div class="row" style="justify-content:space-between;margin-top:28px"><p class="eyebrow" style="color:var(--ink2)">Characters you read</p><span class="small muted"><b style="color:var(--seal)">${nMast}</b> of ${chars.length} without pinyin</span></div>

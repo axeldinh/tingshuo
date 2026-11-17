@@ -13,7 +13,8 @@ An installable web app for Android, iPhone and computers, designed in an "Ink & 
 - **Copybook progress**: 28 days of ink dots, tone accuracy, levels, and every character you've met in a 田 grid. Red seals mark the ones you read without pinyin.
 - **Chapter pages**: reaching a new HSK level opens a full-page chapter (第二章 · 进).
 - **Night ink**: a warm dark mode (Auto / Day / Night), and an optional paper texture.
-- **Spaced repetition**, a placement test, and levels that unlock at 80% accuracy.
+- **Levels that fit beginners and veterans**: a short adaptive placement (4 questions for a beginner, up to 12 for a veteran, with a "Not sure" button). Levels unlock at 80% accuracy and step back by themselves if a level turns out too hard.
+- **No vocabulary skipped**: new sentences are chosen to bring one or two words you haven't met. Veterans still get a few sentences from earlier levels as quick checks: right once and they go away for three weeks, wrong and they're learned like new. Progress shows how many HSK 1–3 words you've met.
 
 Content: 111 hand-written sentences with 333 near-miss distractors, all 595 HSK 1–3 words, stroke data for 631 characters.
 

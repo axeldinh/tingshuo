@@ -66,4 +66,53 @@ const A2 = require('../docs/js/audio.js');
 const tone = (f0, amp, sr = 24000, n = 1080) => Float32Array.from({ length: n }, (_, i) => amp * [1, 2, 3, 4, 5, 6].reduce((v, h) => v + Math.sin(2 * Math.PI * f0 * h * i / sr) / h, 0) / 2);
 t('pitch: quiet phone-level voice is detected', () => { const r = A2.detectPitch(tone(180, 0.003), 24000); assert(r.f0 && Math.abs(r.f0 - 180) < 5, String(r.f0)); });
 t('pitch: noise is not mistaken for voice', () => { for (let k = 0; k < 50; k++) assert(!A2.detectPitch(Float32Array.from({ length: 1080 }, () => 0.02 * (Math.random() * 2 - 1)), 24000).f0); });
+// ---- levels & vocabulary: newbies and veterans ----
+const { attachWords } = require('../docs/js/srs.js');
+require('../docs/data/words.js');
+attachWords(window.SENTENCES, window.WORDS);
+const fresh = () => { const st = createStore(mem()); return { st, srs: createSRS(st) }; };
+t('newbie: first session is HSK 1, each item brings a word not met yet', () => {
+  const { srs } = fresh(); const s = srs.session('listen', window.SENTENCES, 10);
+  assert(s.every(x => x.l === 1)); assert(s.every(x => x.w.length > 0));
+});
+t('veteran placed at HSK 3 gets HSK 3 from the first session, plus a few probes', () => {
+  const { srs } = fresh(); srs.setLevel('listen', 3);
+  const s = srs.session('listen', window.SENTENCES, 10);
+  const l3 = s.filter(x => x.l === 3).length; assert(l3 >= 6 && l3 < 10, 'HSK3 items: ' + l3);
+});
+t('probe answered right is pushed three weeks out; wrong comes back soon', () => {
+  const { srs } = fresh(); srs.setLevel('listen', 3);
+  const s = srs.session('listen', window.SENTENCES, 10), probes = s.filter(x => x.l < 3);
+  const right = srs.grade('listen', probes[0].id, 2), wrong = srs.grade('listen', probes[1].id, 0);
+  assert(right.due - Date.now() > 20 * 864e5); assert(wrong.due - Date.now() < 864e5);
+});
+t('placed too high: steps back a level, keeps reviews of harder items', () => {
+  const { srs } = fresh(); srs.setLevel('listen', 3);
+  const hard = window.SENTENCES.filter(x => x.l === 3).slice(0, 12);
+  hard.forEach(x => srs.grade('listen', x.id, 0));
+  assert.strictEqual(srs.checkLevelDown('listen', window.SENTENCES), 2);
+  assert.strictEqual(srs.level('listen'), 2);
+  const realNow = Date.now; Date.now = () => realNow() + 20 * 60e3; // 20 minutes later: the misses are due
+  try { assert(srs.session('listen', window.SENTENCES, 10).some(x => x.l === 3)); } finally { Date.now = realNow; }
+});
+t('doing well at a level does not step back', () => {
+  const { srs } = fresh(); srs.setLevel('listen', 2);
+  window.SENTENCES.filter(x => x.l === 2).slice(0, 16).forEach((x, i) => srs.grade('listen', x.id, i % 4 ? 2 : 0));
+  assert.strictEqual(srs.checkLevelDown('listen', window.SENTENCES), null);
+});
+t('a learner who keeps practising meets every HSK 1-3 word', () => {
+  const { srs } = fresh();
+  for (let k = 0; k < 120; k++) {
+    srs.session('listen', window.SENTENCES, 10).forEach(x => srs.grade('listen', x.id, 2));
+    srs.checkLevelUp('listen', window.SENTENCES);
+  }
+  const v = srs.vocab(window.WORDS);
+  [1, 2, 3].forEach(l => assert.strictEqual(v[l].met, v[l].total, `HSK ${l}: ${v[l].met}/${v[l].total}`));
+});
+t('a veteran placed at HSK 3 also meets every lower-level word', () => {
+  const { srs } = fresh(); srs.setLevel('listen', 3);
+  for (let k = 0; k < 120; k++) srs.session('listen', window.SENTENCES, 10).forEach(x => srs.grade('listen', x.id, 2));
+  const v = srs.vocab(window.WORDS);
+  [1, 2].forEach(l => assert.strictEqual(v[l].met, v[l].total, `HSK ${l}: ${v[l].met}/${v[l].total}`));
+});
 console.log(n, 'tests passed');
