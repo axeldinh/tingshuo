@@ -203,7 +203,10 @@
         const c = contour(res.frames);
         drawGraph(cv, syls, c);
         if (res.url) { audio = new Audio(res.url); mine.disabled = false; }
-        msg.textContent = c ? 'Compare each shape. Then play “Me”.' : 'No clear voice — try a little louder.';
+        msg.textContent = c ? 'Compare each shape. Then play “Me”.'
+          : res.peak < 0.003 ? 'I could barely hear you. Hold the phone closer and try again.'
+          : res.peak < res.noise * 4 ? 'Too much background noise. Try somewhere quieter.'
+          : 'No clear pitch. Say it a little slower, with full vowels.';
         onDone && onDone(c, cv);
       } catch (e) {
         msg.textContent = /Permission|NotAllowed/i.test(e.name + e.message) ? 'Microphone refused — allow it in browser settings.' : 'Microphone error: ' + e.message;

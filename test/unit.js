@@ -62,4 +62,8 @@ t('srs: level up', () => {
   window.SENTENCES.filter(s => s.l === 1).forEach(s => srs.grade('listen', s.id, 2));
   assert.strictEqual(srs.checkLevelUp('listen', window.SENTENCES), 2);
 });
+const A2 = require('../docs/js/audio.js');
+const tone = (f0, amp, sr = 24000, n = 1080) => Float32Array.from({ length: n }, (_, i) => amp * [1, 2, 3, 4, 5, 6].reduce((v, h) => v + Math.sin(2 * Math.PI * f0 * h * i / sr) / h, 0) / 2);
+t('pitch: quiet phone-level voice is detected', () => { const r = A2.detectPitch(tone(180, 0.003), 24000); assert(r.f0 && Math.abs(r.f0 - 180) < 5, String(r.f0)); });
+t('pitch: noise is not mistaken for voice', () => { for (let k = 0; k < 50; k++) assert(!A2.detectPitch(Float32Array.from({ length: 1080 }, () => 0.02 * (Math.random() * 2 - 1)), 24000).f0); });
 console.log(n, 'tests passed');

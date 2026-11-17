@@ -1,5 +1,5 @@
 // Offline cache. Bump VERSION whenever you change any file so phones pick up the update.
-const VERSION = 'tingshuo-ebf80ace';
+const VERSION = 'tingshuo-b55a3e82';
 const FILES = ['./', 'index.html', 'css/app.css', 'manifest.webmanifest', 'vendor/pinyin-pro.js', 'vendor/hanzi-writer.min.js', 'data/words.js', 'data/sentences.js',
   'js/store.js', 'js/srs.js', 'js/chinese.js', 'js/audio.js', 'js/app.js', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });

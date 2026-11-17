@@ -76,10 +76,12 @@
 
   // ---------------- Pitch recording ----------------
   // Normalised autocorrelation (McLeod-style) on a downsampled signal. ~30 frames per second.
-  function detectPitch(buf, sr) {
+  // minRms skips silence. The clarity test below (not loudness) is what rejects noise,
+  // so the gate can sit low: phone mics often deliver speech at an RMS of 0.001–0.004.
+  function detectPitch(buf, sr, minRms = 0.0006) {
     let rms = 0; for (let i = 0; i < buf.length; i++) rms += buf[i] * buf[i];
     rms = Math.sqrt(rms / buf.length);
-    if (rms < 0.004) return { f0: null, rms };
+    if (rms < minRms) return { f0: null, rms };
     const minLag = Math.floor(sr / 520), maxLag = Math.min(Math.floor(sr / 65), buf.length >> 1);
     const n = buf.length - maxLag;
     const nsdf = new Float32Array(maxLag + 1);
@@ -107,7 +109,8 @@
     async start({ onFrame, maxMs = 9000, autoStop = true } = {}) {
       this.ctx = this.ctx || new (global.AudioContext || global.webkitAudioContext)();
       if (this.ctx.state === 'suspended') await this.ctx.resume();
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+      // Automatic gain keeps quiet phone mics usable; it changes loudness slowly, so the pitch is unaffected.
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true } });
       const src = this.ctx.createMediaStreamSource(this.stream);
       const an = this.ctx.createAnalyser(); an.fftSize = 4096; src.connect(an);
       const raw = new Float32Array(an.fftSize);
@@ -119,10 +122,12 @@
         if (global.MediaRecorder) { rec = new MediaRecorder(this.stream); rec.ondataavailable = e => e.data.size && chunks.push(e.data); rec.start(); }
       } catch (e) { rec = null; }
       let voicedSeen = false, lastVoice = 0, stopped = false;
+      let noise = 0.002; // background level, tracked as a slowly rising minimum
+      const gate = () => Math.min(0.004, Math.max(0.0006, noise * 2.5));
       return new Promise(resolve => {
         const finish = () => {
           if (stopped) return; stopped = true; clearInterval(iv);
-          const done = url => { this.stream.getTracks().forEach(t => t.stop()); resolve({ frames, url }); };
+          const done = url => { this.stream.getTracks().forEach(t => t.stop()); resolve({ frames, url, peak: Math.max(0, ...frames.map(f => f.rms)), noise }); };
           if (rec && rec.state !== 'inactive') { rec.onstop = () => done(chunks.length ? URL.createObjectURL(new Blob(chunks, { type: rec.mimeType || 'audio/webm' })) : null); rec.stop(); }
           else done(null);
         };
@@ -131,7 +136,8 @@
           an.getFloatTimeDomainData(raw);
           const off = raw.length - win.length * step;
           for (let i = 0; i < win.length; i++) win[i] = raw[off + i * step];
-          const t = performance.now() - t0, p = detectPitch(win, dsr);
+          const t = performance.now() - t0, p = detectPitch(win, dsr, gate());
+          noise = Math.min(Math.max(p.rms, 0.0002), noise * 1.01);
           frames.push({ t, f0: p.f0, rms: p.rms });
           if (p.f0) { voicedSeen = true; lastVoice = t; }
           onFrame && onFrame(frames);
