@@ -59,7 +59,7 @@ t('srs: session respects level & due', () => {
 });
 t('srs: level up', () => {
   const st = createStore(mem()), srs = createSRS(st);
-  window.SENTENCES.filter(s => s.l === 1).slice(0, 30).forEach(s => srs.grade('listen', s.id, 2));
+  window.SENTENCES.filter(s => s.l === 1).forEach(s => srs.grade('listen', s.id, 2));
   assert.strictEqual(srs.checkLevelUp('listen', window.SENTENCES), 2);
 });
 console.log(n, 'tests passed');
