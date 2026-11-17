@@ -51,7 +51,8 @@ The storage layer is built for real sync: see **SYNC.md**.
   `[level, chinese, english, [other correct answers], [[distractor, why it's wrong] ×3], grammar tag]`
 - Then run `npm install` and `npm run build`. This regenerates `docs/data/*.js` with pinyin, tone changes and neutral tones.
 - Run `npm test` for the logic tests, and `npm run serve` to try the app at http://localhost:8000.
-- Before uploading changes, **increase `VERSION` in `docs/sw.js`** (e.g. `tingshuo-v3`) so installed apps pick up the update.
+- `npm run build` also stamps `VERSION` in `docs/sw.js` with a hash of the app files, so installed apps pick up updates automatically. CI fails if `docs/` is out of date.
+- `npm run coverage` lists which HSK words have no example sentence yet (`node tools/coverage.js --list` for the words).
 
 ## Credits
 - HSK word list: [complete-hsk-vocabulary](https://github.com/drkameleon/complete-hsk-vocabulary) (MIT), with English meanings from CC-CEDICT (CC BY-SA 4.0).
