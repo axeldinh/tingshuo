@@ -20,6 +20,8 @@ body { min-height: 100dvh; }
 html[data-texture="on"] body { background-image: var(--grain); }
 .zh, .hz { font-family: var(--serif-zh); }
 .serif { font-family: var(--serif); }
+/* Pinyin never uses EB Garamond: its ī keeps the dot of the i under the tone mark. */
+.pinyin { font-family: var(--sans); font-style: normal; }
 button { font: inherit; color: inherit; cursor: pointer; }
 a { color: var(--seal); }
 

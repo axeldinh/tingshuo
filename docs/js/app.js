@@ -96,7 +96,7 @@
       const fresh = o.markNew && !x.er && charRec(x.c) == null;
       const py = x.er ? 'r' : (x.ps || x.p);
       return `<span class="syl ${faded ? 'faded' : ''} ${fresh ? 'newword' : ''} ${o.focus === i ? 'focus' : ''} ${st ? 'st-' + st.st : ''}">` +
-        (x.er ? '<span class="tm"></span>' : toneSVG(x.s)) + `<span class="py">${esc(py)}</span><span class="hz">${esc(x.c)}</span>` +
+        (x.er ? '<span class="tm"></span>' : toneSVG(x.s)) + `<span class="py pinyin">${esc(py)}</span><span class="hz">${esc(x.c)}</span>` +
         (o.status ? `<span class="fb">${st ? esc(st.label || '') : ''}</span>` : '') + '</span>';
     }).join('') + '</div>';
   }
@@ -346,7 +346,7 @@
     const userCmp = r.hasHan ? [...input].filter(isHan).join('') : ZH.parsePinyin(input).toneless;
     const head = r.exact ? (r.toneErr ? 'Correct, tones too.' : 'Correct.') : r.close ? 'Almost.' : 'Not quite.';
     let tones = '';
-    if (r.toneErr && r.toneErr.length) { const T = hanOnly(t.sy); tones = `<p class="small" style="margin:6px 0 0">Tone slips: ${r.toneErr.map(i => `<b class="zh">${esc(T[i].c)}</b> is ${esc(T[i].p)}`).join(', ')}</p>`; }
+    if (r.toneErr && r.toneErr.length) { const T = hanOnly(t.sy); tones = `<p class="small" style="margin:6px 0 0">Tone slips: ${r.toneErr.map(i => `<b class="zh">${esc(T[i].c)}</b> is <span class="pinyin">${esc(T[i].p)}</span>`).join(', ')}</p>`; }
     el.innerHTML = `<div class="result fadein"><p class="head">${head}</p>
       ${!r.exact ? `<p class="tiny muted" style="margin:0 0 4px">Yours against the answer: <del style="color:var(--seal)">extra</del> · <ins style="text-decoration:none;color:var(--ok)">missing</ins></p>${diffHTML(userCmp, targetCmp)}` : ''}${tones}
       <div class="card" style="margin-top:14px">${sentHTML(t.sy, { pinyin: true, small: true })}<p class="en" style="font-size:18px">${esc(it.en)}</p></div>
@@ -461,7 +461,7 @@
       if (!ok) { b.classList.add('wrong'); missed(); } else celebrate(ev, host);
       grade(ok ? 2 : 0, { tone: x.s, said });
       const note = SANDHI_NOTE(x);
-      $('[data-res]', host).innerHTML = `<div class="note fadein"><p><span class="zh">${esc(x.c)}</span> ${esc(x.ps)}: ${TONE_WORD[x.s]}. ${esc(note)}</p></div>`;
+      $('[data-res]', host).innerHTML = `<div class="note fadein"><p><span class="zh">${esc(x.c)}</span> <span class="pinyin">${esc(x.ps)}</span>: ${TONE_WORD[x.s]}. ${esc(note)}</p></div>`;
       host.insertAdjacentHTML('beforeend', contBtn()); $('[data-next]', host).onclick = next;
     });
     if (setting('autoplay')) say(it.zh);
@@ -603,7 +603,7 @@
     const draw = () => {
       const q = wordFilter.q.trim().toLowerCase().replace(/\s/g, '');
       const list = window.WORDS.filter(w => (!wordFilter.l || w.l === wordFilter.l) && (!q || w.h.includes(q) || ZH.stripTone(w.p).replace(/\s/g, '').includes(q) || w.m.toLowerCase().includes(q))).slice(0, 200);
-      $('[data-list]').innerHTML = list.map(w => `<button class="wordrow" data-w="${esc(w.id)}"><span class="hz zh">${esc(w.h)}</span><span class="grow"><b>${esc(w.p)}</b><span class="sub">${esc(w.m)}</span></span><span class="r">${w.l}</span></button>`).join('') || '<p class="muted">No match.</p>';
+      $('[data-list]').innerHTML = list.map(w => `<button class="wordrow" data-w="${esc(w.id)}"><span class="hz zh">${esc(w.h)}</span><span class="grow"><b class="pinyin">${esc(w.p)}</b><span class="sub">${esc(w.m)}</span></span><span class="r">${w.l}</span></button>`).join('') || '<p class="muted">No match.</p>';
     };
     $('[data-q]').oninput = e => { wordFilter.q = e.target.value; draw(); };
     $$('[data-l]').forEach(b => b.onclick = () => { wordFilter.l = +b.dataset.l; $$('[data-l]').forEach(x => x.classList.toggle('on', x === b)); draw(); });
@@ -616,7 +616,7 @@
       <div class="row" style="justify-content:center;gap:10px;margin-top:18px;flex-wrap:wrap">${syl.map((s, i) => `<div class="tzg" style="width:${size}px;height:${size}px"><div data-writer="${i}" style="width:${size}px;height:${size}px"></div></div>`).join('')}</div>
       <p class="tiny muted center" data-wmsg style="margin:8px 0 0">Watch the stroke order, then write it yourself.</p>
       <div class="row" style="justify-content:center;margin-top:8px;gap:8px"><button class="btn small" data-anim>Show strokes</button><button class="btn small solid" data-quiz>Write it</button></div>
-      <div style="margin-top:26px"><div class="row" style="align-items:baseline;gap:12px"><span class="zh" style="font-size:40px;font-weight:600">${esc(w.h)}</span><span style="font-size:22px">${esc(w.p)}</span><span class="row" style="gap:2px;color:var(--ink2)">${syl.map(s => toneSVG(s.s, 26, 14, 2)).join('')}</span></div>
+      <div style="margin-top:26px"><div class="row" style="align-items:baseline;gap:12px"><span class="zh" style="font-size:40px;font-weight:600">${esc(w.h)}</span><span class="pinyin" style="font-size:22px">${esc(w.p)}</span><span class="row" style="gap:2px;color:var(--ink2)">${syl.map(s => toneSVG(s.s, 26, 14, 2)).join('')}</span></div>
       <p class="serif" style="font-size:21px;margin:6px 0 0">${esc(w.m)}</p></div>
       <div class="spacer"></div><button class="btn block" data-hear>${ICON.play}&nbsp;Hear it</button>`;
     $('[data-back]').onclick = viewWords;
