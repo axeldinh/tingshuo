@@ -170,7 +170,9 @@
   const negCount = s => { for (const f of NEG_FREE) s = s.split(f).join(''); s = s.replace(/(\p{Script=Han})[不没]\1/gu, '$1'); return [...s].filter(c => NEG.has(c)).length; };
 
   /** How much a heard syllable weighs when it is not part of the reply. */
-  const extraWeight = h => h.filler ? 0 : NEG.has(h.c) ? 2 : PARTICLE.has(h.c) ? .25 : 1;
+  const extraWeight = h => h.filler || h.c === '儿' || h.light ? 0 : NEG.has(h.c) ? 2 : PARTICLE.has(h.c) ? .25 : 1;
+  // small function words that don't make a different answer when added (一下, 这个, 就, 也…)
+  const FUNCTION = new Set('个一下就也都还是在有那这把给让请再又很太真挺吧');
   /** The heard text as syllables, fillers marked (a filler word only counts as one when the wording doesn't use it). */
   function heardSyllables(text, zh) {
     // 806 is a room number said digit by digit unless the wording counts in hundreds
@@ -179,7 +181,8 @@
     const H = []; let pos = 0;
     for (const ch of s) {
       if (ZH().isHan(ch)) {
-        for (const x of ZH().syllablesOf(ch)) H.push({ ...x, filler: FILLER.has(ch) && !zh.includes(ch) || fill.some(([a, n]) => pos >= a && pos < a + n) });
+        for (const x of ZH().syllablesOf(ch)) H.push({ ...x, filler: FILLER.has(ch) && !zh.includes(ch) || fill.some(([a, n]) => pos >= a && pos < a + n),
+          light: ch === '有' && s[pos - 1] === '没' && !zh.includes('没有') }); // 没有 for 没
       }
       pos += ch.length;
     }
@@ -224,8 +227,8 @@
       if (best.n < L) missing.push(u);
       placed.push({ u, pos: best.s });
     }
-    let usedW = 0, extraW = 0;
-    H.forEach((h, j) => { if (used[j]) usedW += extraWeight(h); else extraW += extraWeight(h); });
+    let usedW = 0, extraW = 0, extraContent = 0;
+    H.forEach((h, j) => { const x = extraWeight(h); if (used[j]) usedW += x; else { extraW += x; if (x === 1 && !FUNCTION.has(h.c)) extraContent++; } });
     const heardNegs = negCount(syn.s);
     // people and numbers must keep their order within a clause
     let swapped = false;
@@ -235,7 +238,10 @@
     // a missing number or negation is a wrong answer when the rest of its clause was said (not when the clause was cut off)
     const saidClause = new Set(placed.filter(x => !missing.includes(x.u)).map(x => x.u.clause));
     return { recall: p.W ? got / p.W : 0, prec: usedW + extraW ? usedW / (usedW + extraW) : 0, tone: p.W ? tone / p.W : 0, syn: syn.used,
-      negExtra: heardNegs > p.negs, critical: missing.filter(u => (u.cls === 'num' || u.cls === 'neg') && saidClause.has(u.clause)), missing, swapped, syl, said: H.filter(h => !h.filler).length };
+      negExtra: heardNegs > p.negs,
+      // a word of the reply is missing and another word stands in its place: a different answer (咖啡 for 茶)
+      swappedWord: extraContent > 0 && missing.some(u => u.w >= 1 && (u.cls === 'word' || u.cls === 'time') && !placed.some(x => x.u === u)),
+      critical: missing.filter(u => (u.cls === 'num' || u.cls === 'neg') && saidClause.has(u.clause)), missing, swapped, syl, said: H.filter(h => !h.filler).length };
   }
 
   /** Strict, in-order similarity (tones count): how a near-miss is told apart from the reply it imitates. */
@@ -258,10 +264,27 @@
   /** Recall-leaning F-score: what was said should cover the reply; extra words matter less. */
   const fbeta = (R, P) => R + P ? 5 * P * R / (4 * P + R) : 0;
   // Thresholds, tuned on the scenes not held out in test/speech-cases.js
-  const SPEECH = { ok: 0.75, near: 0.55, tone: 0.12, prec: 0.35, miss: 0.8, clause: 1.5 };
+  const SPEECH = { ok: 0.75, near: 0.55, tone: 0.12, prec: 0.35, miss: 0.8, clause: 1.5, frame: 0.6 };
 
+  // Optional: a meaning model (meaning.js) for replies in the learner's own words that the word matcher could not take.
+  let meaning = null;
+  const useMeaning = m => { meaning = m; };
   /** Understand a spoken reply at `node`. Returns the match the engine grades (see match()). */
   function matchSpeech(node, raw) {
+    const m = matchWords(node, raw);
+    if (!meaning || !meaning.ready || m.distractor || m.extraNeg || m.critical || !m.said) return m;
+    // only a reply that is not taken (or only nearly), not cut off, people not swapped, tones not slipped
+    if (!(m.retry || (m.q === 1 && !m.partial && !m.swapped && !m.toneSlip))) return m;
+    const j = meaning.judge(node, m.said);
+    // the reply's own sentence with one word swapped (咖啡 for 茶) needs stronger evidence than a sentence in other words
+    if (!meaning.accepts(j, m.swappedWord && m.score >= SPEECH.frame)) return m;
+    const form = formsOf(node).find(f => f.r === j.reply && norm(f.zh) === norm(j.zh)) || formsOf(node).find(f => f.r === j.reply);
+    return { reply: j.reply, form, q: 2, score: j.sim, exact: false, own: true, meaning: { sim: j.sim, margin: j.margin }, heard: understandHeard(form, m), said: m.said };
+  }
+  const understandHeard = (form, m) => { const u = understand(form, m.said); return { syl: u.syl, score: u.recall, heard: m.heard.heard }; };
+
+  /** The word matcher. */
+  function matchWords(node, raw) {
     const text = ZH().normalizeHeard(raw), forms = formsOf(node), misses = missesOf(node);
     const said = heardSyllables(text, '').filter(h => !h.filler).length;
     const scored = forms.map(f => ({ f, u: understand(f, text) }))
@@ -279,17 +302,20 @@
     const keyMissing = u.missing.filter(m => m.w >= 1).sort((a, b) => b.w - a.w).map(m => m.text);
     const retry = extra => ({ ...base, q: null, exact: false, retry: true, missing: keyMissing, ...extra });
     if (u.negExtra) return retry({ extraNeg: true });
-    if (u.critical.length) return retry({ missing: [...new Set([...u.critical.map(m => m.text), ...keyMissing])] });
+    if (u.critical.length) return retry({ critical: true, missing: [...new Set([...u.critical.map(m => m.text), ...keyMissing])] });
+    if (u.swappedWord && u.recall < SPEECH.ok) return retry({ swappedWord: true, score: u.recall });
     const exact = sf >= 0.999 && u.recall >= 0.999 && !u.syn;
     const own = !exact && (u.syn || u.prec < 0.9 || strictSim(f, text) < 0.85);
     if (u.recall >= SPEECH.ok) {
-      const q = u.tone > SPEECH.tone || u.swapped || u.prec < SPEECH.prec ? 1 : 2;
-      return { ...base, q, exact, own, swapped: u.swapped };
+      const q = u.tone > SPEECH.tone || u.swapped || u.swappedWord || u.prec < SPEECH.prec ? 1 : 2;
+      return { ...base, q, exact, own, swapped: u.swapped, swappedWord: u.swappedWord, toneSlip: u.tone > SPEECH.tone };
     }
     // cut off at a pause: a whole clause that carries meaning was said, and nothing else
     const p = prepare(f), clauses = [...new Set(p.units.map(x => x.clause))];
     const whole = clauses.some(c => { const us = p.units.filter(x => x.clause === c); return us.reduce((a, x) => a + x.w * x.syl.length, 0) >= SPEECH.clause && us.every(x => !u.missing.includes(x)); });
-    if ((u.recall >= SPEECH.near && u.prec >= 0.5) || (whole && u.prec >= 0.75)) return { ...base, q: 1, exact: false, own, partial: true, missing: keyMissing };
+    // cut off: what is missing all comes after the last word heard
+    const lastHeard = Math.max(-1, ...u.syl.map((x, i) => x.st !== 'miss' ? i : -1)), cut = u.syl.every((x, i) => x.st !== 'miss' || i > lastHeard);
+    if ((u.recall >= SPEECH.near && u.prec >= 0.5) || (whole && u.prec >= 0.75)) return { ...base, q: 1, exact: false, own, partial: cut, swappedWord: u.swappedWord, missing: keyMissing };
     return retry();
   }
 
@@ -339,7 +365,7 @@
     }
   }
 
-  const api = { ScriptedEngine, validateScene, pathLengths, paths, stepsLeft, replyItems, speechScore, match, norm };
+  const api = { ScriptedEngine, validateScene, pathLengths, paths, stepsLeft, replyItems, speechScore, match, useMeaning, norm };
   global.Dialogue = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -60,8 +60,8 @@ function metrics(rs) {
 function report(rs, label) {
   const row = (name, m) => console.log(`${name.padEnd(12)} ${String(m.cases).padStart(4)}  accept-correct ${String(m.acceptCorrect).padStart(5)}%  understood ${String(m.understood).padStart(5)}%  retry ${String(m.retry).padStart(5)}%  false-accept ${String(m.falseAcceptNeg).padStart(5)}% of wrong (${m.falseAccept}% of all)  reason shown ${m.reasonShown}%  unrelated retried ${m.noneRetried}%`);
   console.log(`\n${label}`);
-  row('all', metrics(rs)); row('tuning', metrics(rs.filter(r => !r.held))); row('held out', metrics(rs.filter(r => r.held)));
-  if (rs.some(r => r.fresh)) row(' blind', metrics(rs.filter(r => r.fresh)));
+  row('all', metrics(rs)); row('tuning', metrics(rs.filter(r => !r.held))); row('held out', metrics(rs.filter(r => r.held && !r.fresh)));
+  if (rs.some(r => r.fresh)) row('blind', metrics(rs.filter(r => r.fresh)));
   if (arg('--tags')) for (const tag of [...new Set(rs.map(r => r.tag))].sort()) {
     const t = rs.filter(r => r.tag === tag), g = k => t.filter(r => r.grade === k).length;
     console.log(`  ${tag.padEnd(11)} ${String(t.length).padStart(3)}  pass ${g('pass')}  soft ${g('soft')}  fail ${g('fail')}  false-accept ${g('false-accept')}`);
@@ -87,21 +87,26 @@ if (require.main === module) (async () => {
   if (arg('--baseline')) report(run(baselineMatch), 'Spoken replies: phase-1 matcher (before)');
   const rs = run(DLG.match);
   const all = report(rs, 'Spoken replies: offline matcher');
-  const held = metrics(rs.filter(r => r.held));
+  const held = metrics(rs.filter(r => r.held && !r.fresh));
   if (arg('--meaning')) {
-    const M = require('../docs/js/meaning.js');
-    const ok = await M.loadForNode(process.env.MEANING_MODEL_DIR);
-    if (!ok) console.log('\nMeaning model not available (set MEANING_MODEL_DIR to a local copy of the model files).');
+    // needs a local copy of the model files (MEANING_MODEL_DIR) and the library (TRANSFORMERS_PATH); see CONVERSATIONS.md
+    const M = require('../docs/js/meaning.js'), ZH = require('../docs/js/chinese.js');
+    try { require('../docs/data/reply-vectors.js'); } catch (e) {}
+    if (!(await M.loadForNode(process.env.MEANING_MODEL_DIR))) console.log('\nMeaning model not available' + (M.error ? ': ' + M.error.message : ' (set MEANING_MODEL_DIR and TRANSFORMERS_PATH).'));
     else {
-      const meaningMatch = DLG.withMeaning(DLG.match, M);
-      const rows = [];
-      for (const c of CASES) rows.push(c); // warm up embeddings of every heard string, then match synchronously
-      await M.prepare(window.DIALOGUES, CASES.map(c => c[2]));
-      report(run(meaningMatch), 'Spoken replies: offline matcher + meaning model');
+      await M.prepare(window.DIALOGUES);
+      for (const c of CASES) await M.remember(ZH.normalizeHeard(c[2]));
+      DLG.useMeaning(M);
+      const mr = run(DLG.match);
+      report(mr, `Spoken replies: offline matcher + meaning model (reply vectors ${M.precomputed ? 'precomputed' : 'computed here'})`);
+      const changed = mr.filter((r, i) => r.grade !== rs[i].grade);
+      console.log(`  changed by the model: ${changed.length} (${changed.filter(r => r.grade === 'pass').length} now pass, ${changed.filter(r => r.grade === 'false-accept').length} now false accepts)`);
+      if (arg('--fails')) changed.forEach((r, i) => console.log(`    ${rs[mr.indexOf(r)].grade} -> ${r.grade}  ${r.sc}/${r.node} “${r.heard}”`));
+      DLG.useMeaning(null);
     }
   }
   // Floors: a change to the matcher must not make speech worse than this (held-out numbers are checked too).
-  const floors = [['acceptCorrect', 85, 1], ['falseAcceptNeg', 3, -1], ['retry', 10, -1]];
+  const floors = [['acceptCorrect', 88, 1], ['falseAcceptNeg', 2, -1], ['retry', 8, -1]];
   const bad = [];
   for (const [k, v, dir] of floors) for (const [name, m] of [['all', all], ['held out', held]]) if ((m[k] - v) * dir < 0) bad.push(`${name} ${k} ${m[k]} (floor ${v})`);
   if (bad.length && !arg('--no-floors')) { console.error('\nSpeech matching fell below its floors: ' + bad.join(', ')); process.exit(1); }
