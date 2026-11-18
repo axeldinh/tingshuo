@@ -245,6 +245,38 @@ t('speech: the recogniser guess that answers best is chosen', () => {
   assert(DLG.speechScore(opts, '您好我去北京') > DLG.speechScore(opts, '您好我去背景'));
   assert(DLG.speechScore(opts, '您好我去背景') > DLG.speechScore(opts, '天气很好'));
 });
+// the optional meaning model, stood in for by a judge that always answers: it may only take what the word matcher could not
+const MEAN = require('../docs/js/meaning.js');
+const standIn = (reply, sim) => ({ ready: true, accepts: MEAN.accepts, judge: () => ({ reply, zh: DLG.norm(reply.zh), sim, margin: 0.2, other: 0.2 }) });
+t('meaning model: takes a paraphrase the words missed, never a near-miss, a 不 or a wrong number', () => {
+  const taste = scene('food').nodes.taste, four = scene('call').nodes.four, like = scene('meet').nodes.like;
+  try {
+    DLG.useMeaning(standIn(taste.replies[0], 0.83));
+    const p = said('food', 'taste', '味道很好'); assert.strictEqual(p.q, 2); assert(p.own && p.meaning); assert.strictEqual(p.reply.id, taste.replies[0].id);
+    assert(said('food', 'taste', '很好吃吗').distractor);
+    DLG.useMeaning(standIn(like.replies[0], 0.95)); assert(said('meet', 'like', '我不喜欢北京').retry || said('meet', 'like', '我不喜欢北京').distractor);
+    DLG.useMeaning(standIn(four.replies[0], 0.97)); assert(said('call', 'four', '五点很好').retry);
+    // one word swapped into the reply's own sentence needs a closer match
+    DLG.useMeaning(standIn(scene('food').nodes.drink.replies[0], 0.8)); assert(said('food', 'drink', '我想喝咖啡').retry);
+    DLG.useMeaning(standIn(scene('food').nodes.drink.replies[0], 0.9)); assert.strictEqual(said('food', 'drink', '我想喝咖啡').q, 2);
+    DLG.useMeaning({ ready: false, accepts: MEAN.accepts, judge: () => null }); assert(said('food', 'taste', '味道很好').retry);
+  } finally { DLG.useMeaning(null); }
+});
+t('meaning model: optional, never precached; its library pinned and cached apart', () => {
+  const fs = require('fs'), sw = fs.readFileSync(__dirname + '/../docs/sw.js', 'utf8'), html = fs.readFileSync(__dirname + '/../docs/index.html', 'utf8');
+  const files = sw.match(/const FILES = \[([^\]]*)\]/)[1];
+  assert(!/meaning|reply-vectors|transformers/.test(files)); assert(!/meaning\.js|reply-vectors/.test(html));
+  assert(/@\d+\.\d+\.\d+\//.test(MEAN.LIB) && MEAN.LIB.startsWith(sw.match(/MEANING_LIB = '([^']+)'/)[1]));
+  assert(/k\.startsWith\('tingshuo-'\)/.test(sw), 'app updates must not delete the model caches');
+});
+t('meaning model: precomputed reply vectors are well formed', () => {
+  try { require('../docs/data/reply-vectors.js'); } catch (e) { return; }
+  const V = window.REPLY_VECTORS; assert.strictEqual(V.model, MEAN.MODEL);
+  assert.strictEqual(Buffer.from(V.data, 'base64').length, V.texts.length * V.dim); assert.strictEqual(V.scale.length, V.texts.length);
+  const have = new Set(V.texts), clean = s => s.replace(/[\s\p{P}]/gu, '');
+  const missing = DLG.replyItems(SC).flatMap(r => [r.zh, ...r.alt.map(a => a.zh)]).map(clean).filter(z => !have.has(z));
+  if (missing.length) console.log(`  (reply vectors miss ${missing.length} replies; the app embeds those itself. Refresh with tools/embed-replies.js)`);
+});
 t('engine: every route of every scene plays to the end', () => SC.forEach(s => DLG.paths(s).forEach(p => {
   let tn = E.start(s, {});
   for (const id of p) { const r = tn.options.find(o => o.id === id); tn = E.reply(tn.state, { text: r.zh, via: 'choice' }); }

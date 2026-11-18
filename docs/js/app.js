@@ -16,7 +16,7 @@
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   // ---------------- settings & look ----------------
-  const DEFAULTS = { pinyin: 'fade', toneMarks: true, ink: 'auto', texture: true, sounds: true, rate: 0.85, voice: '', autoplay: true, hideShadow: true, size: 12, talkInput: 'tap' };
+  const DEFAULTS = { pinyin: 'fade', toneMarks: true, ink: 'auto', texture: true, sounds: true, rate: 0.85, voice: '', autoplay: true, hideShadow: true, size: 12, talkInput: 'tap', meaning: false };
   const setting = k => store.get('settings', k, DEFAULTS[k]);
   const setSetting = (k, v) => { store.put('settings', k, v); applyLook(); };
   const darkMQ = window.matchMedia ? matchMedia('(prefers-color-scheme: dark)') : null;
@@ -564,6 +564,23 @@
   if (store.get('levels', 'converse', null) == null) srs.setLevel('converse', Math.max(...['listen', 'shadow', 'translate', 'tone'].map(m => srs.level(m))));
   const dueTalk = now => new Set(TALK.filter(it => { const p = srs.get('converse', it.id); return p && p.due <= now; }).map(it => it.id));
 
+  // ---- optional meaning model (meaning.js): off unless turned on in Settings, loaded only here, never precached ----
+  const MEANING_SIZE = { download: 30, stored: 47 }; // MB, as in meaning.js (which is not loaded until needed)
+  const meaningOK = () => typeof WebAssembly === 'object' && 'caches' in window;
+  let meaningLoad = null;
+  const loadScript = src => new Promise((res, rej) => { if (document.querySelector(`script[src="${src}"]`)) return res(); const el = document.createElement('script'); el.src = src; el.onload = res; el.onerror = rej; document.head.appendChild(el); });
+  function ensureMeaning() {
+    if (!setting('meaning') || !meaningOK()) return Promise.resolve(false);
+    if (!meaningLoad) meaningLoad = (async () => {
+      await loadScript('js/meaning.js'); try { await loadScript('data/reply-vectors.js'); } catch (e) { /* computed on the phone instead */ }
+      if (!(await window.Meaning.load())) return false;
+      await window.Meaning.prepare(SCENES); Dialogue.useMeaning(window.Meaning); return true;
+    })().catch(() => false).then(ok => { if (!ok) meaningLoad = null; return ok; }); // offline on the first try: try again next time
+    return meaningLoad;
+  }
+  const meaningStatus = () => !meaningOK() ? 'not available in this browser' : window.Meaning && window.Meaning.ready ? 'on'
+    : window.Meaning && window.Meaning.state === 'failed' ? 'download failed; it will try again next time' : `getting ready (first time: about ${MEANING_SIZE.download} MB)…`;
+
   function viewTalk() {
     talk = null; TTS.stop();
     const L = srs.level('converse'), due = dueTalk(Date.now());
@@ -577,11 +594,14 @@
     view.innerHTML = `<div class="topline"><a class="icon-btn" href="#home" aria-label="Back">${ICON.back}</a><p class="title-zh" style="font-size:30px">对话</p><p class="lede" style="margin:0">Conversation</p></div>
       <p class="small muted" style="margin:16px 0 0">Everyday scenes, a few lines each. Listen, then answer in Chinese.</p>
       <div class="setting"><span class="lbl"><span>Answer by</span>${Recognizer.supported ? '' : '<small>Speaking needs Chrome or Safari</small>'}</span>${segHTML('talkInput', INPUTS())}</div>
+      ${setting('meaning') ? `<p class="tiny muted" data-mstat style="margin:8px 0 0">Understanding your own words: ${meaningStatus()}</p>` : ''}
       ${[1, 2, 3].map(l => `<p class="eyebrow" style="margin-top:24px${l > L ? ';color:var(--ink3)' : ''}">HSK ${l}${l > L ? ' · not open yet' : ''}</p>
         <div class="rows">${SCENES.filter(sc => sc.l === l).map(row).join('')}</div>`).join('')}
       <p class="tiny muted" style="margin-top:16px">The next level opens once you have played every scene at yours, most replies right. You can also set it in Settings.</p>`;
     wireSegs(view);
     $$('[data-scene]').forEach(b => b.onclick = () => playScene(SCENES.find(sc => sc.id === b.dataset.scene)));
+    const ms = $('[data-mstat]');
+    if (ms) ensureMeaning().then(() => { if (ms.isConnected) ms.textContent = 'Understanding your own words: ' + meaningStatus(); });
   }
 
   function playScene(sc, hidden = false) {
@@ -666,7 +686,11 @@
         if (on) live.textContent = '';
         msg.textContent = on ? 'Listening. Take your time; tap when done.' : 'Tap the red button and say your reply.';
       }, partial => { live.textContent = partial; });
-      if (text != null && talk === tk) { live.textContent = ''; send({ text, via: 'speech', helped }); }
+      if (text == null || talk !== tk) return;
+      live.textContent = '';
+      // the meaning model (when on) embeds what was heard first; the match itself stays synchronous
+      if (window.Meaning && window.Meaning.ready) try { await Promise.race([window.Meaning.remember(ZH.normalizeHeard(text)), new Promise(r => setTimeout(r, 2500))]); } catch (e) {}
+      if (talk === tk) send({ text, via: 'speech', helped });
     };
     $('[data-tap]', area).onclick = () => talkAnswer('tap');
   }
@@ -924,6 +948,7 @@
       ${row("Today's practice", `<select class="plain" data-size>${[8, 12, 16, 20].map(n => `<option ${setting('size') === n ? 'selected' : ''}>${n}</option>`).join('')}</select>`, 'items per round')}
       ${row('Play audio automatically', sw('autoplay'))}
       ${row('Hide text when shadowing again', sw('hideShadow'))}
+      ${row('Understand my own words', meaningOK() ? sw('meaning') : '<span class="small muted">Not available here</span>', `In conversations, a spoken reply in other words is matched by meaning on this phone. One download of about ${MEANING_SIZE.download} MB the next time you open Conversation (${MEANING_SIZE.stored} MB stored), then it works offline. <span data-mstored></span>`)}
       ${row(`Voice speed <b data-ratev>${setting('rate')}×</b>`, `<input type="range" min="0.5" max="1.2" step="0.05" value="${setting('rate')}" data-rate style="width:45%">`)}
       ${TTS.voices.length ? row('Voice', `<select class="plain" data-voice style="max-width:55%">${TTS.voices.map(v => `<option ${TTS.voice && TTS.voice.name === v.name ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}</select>`) : row('Voice', '<span class="small muted">No Chinese voice found</span>')}
       <button class="linkbtn" data-test>Test the voice</button>
@@ -940,6 +965,16 @@
       <p class="tiny muted center" style="margin-top:22px">${SENT.length} sentences · ${window.WORDS.length} words · stroke data © Arphic (APL)</p>`;
     wireSegs(view);
     $$('[data-sw]').forEach(b => b.onclick = () => { const v = !setting(b.dataset.sw); setSetting(b.dataset.sw, v); b.setAttribute('aria-checked', v); if (v && b.dataset.sw === 'sounds') sfx('ok'); });
+    // the meaning model's files, once downloaded, can be removed here
+    if ('caches' in window) caches.has('transformers-cache').then(has => {
+      const el = $('[data-mstored]'); if (!has || !el) return;
+      el.innerHTML = '<button class="linkbtn" data-mremove style="padding:4px 0">Remove the download</button>';
+      $('[data-mremove]').onclick = async () => {
+        setSetting('meaning', false); Dialogue.useMeaning(null); meaningLoad = null;
+        if (window.Meaning) await window.Meaning.remove(); else for (const k of ['transformers-cache', 'tingshuo-meaning']) await caches.delete(k);
+        toast('Removed'); viewSettings();
+      };
+    });
     $('[data-size]').onchange = e => setSetting('size', +e.target.value);
     $$('[data-lv]').forEach(el => el.onchange = () => srs.setLevel(el.dataset.lv, +el.value));
     const vs = $('[data-voice]'); if (vs) vs.onchange = () => { setSetting('voice', vs.value); TTS.pick(vs.value); };
