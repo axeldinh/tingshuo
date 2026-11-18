@@ -161,7 +161,7 @@
     }
   }
 
-  const api = { ScriptedEngine, validateScene, pathLengths, paths, stepsLeft, replyItems, speechScore, norm };
+  const api = { ScriptedEngine, validateScene, pathLengths, paths, stepsLeft, replyItems, speechScore, match, norm };
   global.Dialogue = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
