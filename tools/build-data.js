@@ -25,12 +25,12 @@ const NEUTRAL_WORDS = new Set(NEUTRAL2);
 // characters that are always neutral when they follow a verb/adjective in these sentences
 const ALWAYS_NEUTRAL = new Set(['了','的','吗','吧','呢','着','过','得','们']);
 const WORDSET = new Set(words.map(w => w.h).concat(NEUTRAL2, ['北京','上海','烤鸭','号码','小王','小李','一会儿','一点儿','有点儿','这儿','那儿','哪儿','差点儿','出租车','自行车','公共汽车','洗手间','火车站','电子邮件','中国人','怎么样','为什么']));
-function segment(chars) { // greedy longest match over Han runs
+function segment(chars, set = WORDSET) { // greedy longest match over Han runs
   const seg = []; let i = 0;
   while (i < chars.length) {
     if (!isHan(chars[i])) { seg.push([i, 1]); i++; continue; }
     let len = 1;
-    for (let L = 4; L > 1; L--) { const w = chars.slice(i, i + L).join(''); if (w.length === L && WORDSET.has(w)) { len = L; break; } }
+    for (let L = 4; L > 1; L--) { const w = chars.slice(i, i + L).join(''); if (w.length === L && set.has(w)) { len = L; break; } }
     seg.push([i, len]); i += len;
   }
   return seg;
@@ -107,13 +107,18 @@ for (const [l, zh, en, alt, d, g] of SRC) {
 // --- conversation scenes: same syllable data as sentences, checked as graphs ---
 const { validateScene } = require('../docs/js/dialogue.js');
 const levelChars = { 1: 1, 2: 2, 3: 3 }; for (const l in levelChars) levelChars[l] = new Set(words.filter(w => w.l <= l).flatMap(w => [...w.h]));
-const withSy = zh => ({ zh, sy: syllables(zh) });
+// ws: the reply cut into words (punctuation kept as its own token), so spoken replies can be matched word by word
+// (names, greetings and days are whole words here; this does not change the tone data above)
+const MATCH_WORDS = new Set([...WORDSET, '大明', '小月', '你好', '您好', '好的', '再见', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期天', '星期日', '不是', '没有', '不要', '一会儿', '会议室', '电影院', '车号',
+  '走路', '可是', '第一次', '怎么走', '好喝', '不错', '有事', '上车', '下车', '没用', '没事', '多少钱']);
+const wordsOf = zh => { const ch = [...zh]; return segment(ch, MATCH_WORDS).map(([st, len]) => ch.slice(st, st + len).join('')); };
+const withSy = zh => ({ zh, sy: syllables(zh), ws: wordsOf(zh) });
 const dialogues = require('../src/dialogues.src.js').map(sc => ({
   id: sc.id, l: sc.l, title: sc.title, en: sc.en, who: sc.who, intro: sc.intro, start: sc.start, tsy: syllables(sc.title || ''),
   nodes: Object.fromEntries(Object.entries(sc.nodes).map(([k, [zh, en, rs]]) => [k, rs === 'end'
     ? { id: `c-${sc.id}-${k}`, zh, en, sy: syllables(zh || ''), end: true, replies: [] }
     : { id: `c-${sc.id}-${k}`, zh, en, sy: syllables(zh || ''), replies: (rs || []).map(([zh, en, next, d = [], alt = []], i) => ({
-        id: `c-${sc.id}-${k}-${i + 1}`, l: sc.l, zh, en, next, sy: syllables(zh || ''), alt: alt.map(withSy), d: d.map(([z, why]) => ({ ...withSy(z || ''), why })) })) }])),
+        id: `c-${sc.id}-${k}-${i + 1}`, l: sc.l, zh, en, next, sy: syllables(zh || ''), ws: wordsOf(zh || ''), alt: alt.map(withSy), d: d.map(([z, why]) => ({ ...withSy(z || ''), why })) })) }])),
 }));
 const dlgErrors = [], dlgLengths = [];
 if (new Set(dialogues.map(s => s.id)).size !== dialogues.length) dlgErrors.push('two scenes share an id');

@@ -197,7 +197,7 @@ t('engine: a typed near miss gets q 1 and a correction; a typed distractor gets 
   const miss = E.reply(st, { text: '我买想苹果', via: 'typed' }).feedback; assert.strictEqual(miss.q, 0); assert(/想 goes before/.test(miss.distractor.why));
   assert.strictEqual(E.reply(st, { text: '我想买苹果', via: 'typed', helped: true }).feedback.q, 1);
 });
-t('engine: speech is matched with compareSpeech; a near match is recast, noise is retried', () => {
+t('engine: speech is matched word by word; a tone slip is recast, noise is retried', () => {
   const st = E.start(scene('ticket'), {}).state;
   const ok = E.reply(st, { text: '您好我去北京', via: 'speech' }).feedback; assert.strictEqual(ok.q, 2); assert(ok.exact);
   const near = E.reply(st, { text: '您好我去背景', via: 'speech' }); // 北京 běijīng heard as 背景 bèijǐng
@@ -207,6 +207,43 @@ t('engine: speech is matched with compareSpeech; a near match is recast, noise i
   assert(noise.feedback.retry); assert.strictEqual(noise.feedback.q, null); assert.strictEqual(noise.state, st);
   const wrong = E.reply(st, { text: '您好我来北京', via: 'speech' }).feedback; // the 来/去 distractor, said cleanly
   assert.strictEqual(wrong.q, 0); assert(/来 = come/.test(wrong.distractor.why));
+});
+const said = (sc, node, text) => DLG.match(scene(sc).nodes[node], { text, via: 'speech' });
+t('speech: fillers, dropped particles, homophones and extra polite words are fine', () => {
+  ['嗯我叫大明', '我叫大鸣', '那个，我叫大明啊'].forEach(x => assert.strictEqual(said('meet', 'hi', x).q, 2, x));
+  const r = said('ticket', 'hi', '我要买一张去北京的火车票'); assert.strictEqual(r.q, 2); assert(r.own); assert.strictEqual(r.reply.zh, '我要一张去北京的票。');
+  assert(!said('meet', 'hi', '我叫大明').own);
+});
+t('speech: word order is free, except who does what', () => {
+  assert.strictEqual(said('meet', 'job', '我在医院工作，我是医生').q, 2);
+  assert.strictEqual(said('call', 'me', '我们明天去看电影好不好').q, 2); // 好不好 is a question, not a 不
+  const sw = said('plans', 'after', '好你请我吃饭'); assert(sw.q < 2 || sw.distractor);
+});
+t('speech: a 不 the reply lacks, or a wrong number, is never accepted', () => {
+  const neg = said('meet', 'like', '我不喜欢北京'); assert(neg.retry || neg.distractor); assert(!neg.q);
+  const num = said('call', 'four', '五点很好'); assert(num.retry); assert(num.missing.includes('四'));
+});
+t('speech: everyday synonyms and a reply cut off at a pause', () => {
+  assert.strictEqual(said('way', 'far', '可以坐公交车吗').q, 2);
+  assert.strictEqual(said('clothes', 'else', '不用了，谢谢').q, 2);
+  const cut = said('meet', 'hy', '谢谢是我在这儿学习'); assert.strictEqual(cut.q, 1); assert(!cut.retry);
+});
+t('speech: digits, clock times, room numbers and traditional characters', () => {
+  assert.strictEqual(ZH.normalizeHeard('9:30以前'), '九点半以前');
+  assert.strictEqual(ZH.normalizeHeard('對不起我還在地鐵上'), '对不起我还在地铁上');
+  assert.strictEqual(said('late', 'eta', '9:30以前应该能到').q, 2);
+  assert.strictEqual(said('hotel', 'floor', '806好的早饭几点开始').q, 2);
+  assert.strictEqual(said('clothes', 'deal', '好就300吧').q, 2);
+});
+t('speech: a near-miss said with a filler or an extra word still gets its reason', () => {
+  assert(/在家 goes before/.test(said('call', 'doing', '我看电视在家里你呢').distractor.why));
+  assert(said('food', 'rec', '好的我不想吃这个').distractor);
+  assert.strictEqual(said('meet', 'hi', '').retry, true);
+});
+t('speech: the recogniser guess that answers best is chosen', () => {
+  const opts = scene('ticket').nodes.hi.replies;
+  assert(DLG.speechScore(opts, '您好我去北京') > DLG.speechScore(opts, '您好我去背景'));
+  assert(DLG.speechScore(opts, '您好我去背景') > DLG.speechScore(opts, '天气很好'));
 });
 t('engine: every route of every scene plays to the end', () => SC.forEach(s => DLG.paths(s).forEach(p => {
   let tn = E.start(s, {});

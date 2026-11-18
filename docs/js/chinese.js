@@ -22,6 +22,21 @@
   }
   const digitsToZh = s => s.replace(/\d+/g, numToZh);
 
+  // --- what a recogniser returns, made comparable: simplified characters, numbers and times spelled out, a few English words ---
+  // Traditional -> simplified for every character of the word list and the scenes (pairs: traditional, simplified),
+  // made with OpenCC (cn -> tw, hk, t) and kept only where the traditional form is not itself used as simplified.
+  const T2S_PAIRS = '愛爱氣气車车電电話话點点腦脑視视東东讀读對对兒儿飯饭館馆飛飞機机鐘钟興兴個个漢汉語语後后會会幾几開开見见塊块來来師师裡里媽妈嗎吗買买貓猫沒没關关係系蘋苹錢钱請请熱热認认識识麼么時时書书誰谁覺觉說说歲岁聽听學学們们歡欢現现寫写謝谢習习醫医樣样這这國国幫帮報报紙纸別别從从錯错籃篮間间務务員员訴诉給给貴贵還还號号紅红場场雞鸡紹绍進进試试課课樂乐離离兩两遊游賣卖門门邊边讓让體体錶表題题為为問问顏颜藥药經经陰阴魚鱼遠远運运動动張张長长著着準准備备靜静辦办飽饱較较賽赛須须變变賓宾單单參参層层襯衬績绩遲迟廚厨詞词聰聪掃扫帶带擔担當当鐵铁圖图燈灯鍛锻鍊炼餓饿發发燒烧複复乾干淨净剛刚據据園园於于過过護护畫画壞坏環环換换黃黄議议極极記记節节檢检簡简講讲腳脚結结決决舊旧舉举調调褲裤藍蓝瞭了禮礼歷历臉脸練练輛辆鄰邻樓楼綠绿馬马滿满麵面條条難难級级輕轻鳥鸟盤盘實实騎骑鉛铅筆笔傘伞網网聲声樹树數数雙双雖虽陽阳頭头髮发萬万慣惯聞闻鮮鲜選选擇择鏡镜爺爷銀银應应該该響响戲戏願愿雲云顧顾終终種种週周總总業业鴨鸭彆别碼码隻只鑰钥郵邮颳刮風风涼凉裏里説说牀床麪面喫吃爲为纔才';
+  const T2S = new Map(); for (let i = 0; i < T2S_PAIRS.length; i += 2) T2S.set(T2S_PAIRS[i], T2S_PAIRS[i + 1]);
+  const toSimplified = s => [...s].map(c => T2S.get(c) || c).join('');
+  const EN = [[/\b(ok|okay)\b/gi, '好'], [/\bbye(\s*bye)?\b/gi, '再见'], [/\b(thanks|thank you)\b/gi, '谢谢'], [/\b(hello|hi)\b/gi, '你好']];
+  /** Clean up recogniser output: NFKC (full-width digits), traditional characters, clock times (9:30 -> 九点半), a few English words. */
+  function normalizeHeard(text) {
+    let s = toSimplified(String(text || '').normalize('NFKC'));
+    s = s.replace(/(\d{1,2})\s*[:：]\s*(\d{2})/g, (_, h, m) => numToZh(h) + '点' + (m === '00' ? '' : m === '30' ? '半' : numToZh(m) + '分'));
+    for (const [re, zh] of EN) s = s.replace(re, zh);
+    return s;
+  }
+
   /** Syllables of any Chinese text, with dictionary tones. */
   function syllablesOf(text) {
     text = digitsToZh(text || '');
@@ -177,6 +192,6 @@
     return chars.map((c, i) => ({ c, b: base[i], t: dict[i], s: sp[i] }));
   }
 
-  global.ZH = { isHan, stripTone, syllablesOf, compareSpeech, checkTyped, parsePinyin, segmentWords, numToZh, lev, markTone, spokenTones, TONE_GLYPH, TONE_NAME };
+  global.ZH = { isHan, stripTone, syllablesOf, normalizeHeard, toSimplified, compareSpeech, checkTyped, parsePinyin, segmentWords, numToZh, lev, markTone, spokenTones, TONE_GLYPH, TONE_NAME };
   if (typeof module !== 'undefined') module.exports = global.ZH;
 })(typeof window !== 'undefined' ? window : globalThis);
