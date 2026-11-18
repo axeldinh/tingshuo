@@ -21,7 +21,7 @@ engine.reply(state, utterance)    // utterance = { text, via: 'choice' | 'speech
 
 ## Phase 1: scripted scenes (now)
 - **Content:** `src/dialogues.src.js`, about 12 scenes (4 per HSK level), 6–8 exchanges each: ordering food, buying a ticket, asking the way, meeting someone, at the doctor's, making plans… Each app line has 2–3 acceptable learner replies, each reply leads to the next app line (light branching, rejoining), and each reply has near-miss distractors with a reason, like the sentence bank.
-- **Build:** `tools/build-data.js` also emits `docs/data/dialogues.js` with the same syllable data (pinyin, tone changes, neutral tones) as sentences. The build fails if a scene uses characters above its level, has an unreachable node, or a dead end.
+- **Build:** `tools/build-data.js` also emits `docs/data/dialogues.js` with the same syllable data (pinyin, tone changes, neutral tones) as sentences. The build fails on an unreachable node, a dead end, a loop, a missing gloss or a distractor equal to an accepted reply; characters above the scene's level are a build warning and a failing unit test.
 - **Engine:** `ScriptedEngine` implements the interface.
 - **Screen:** chat-style, Ink & Paper look. The app line is spoken and shown with tone shapes (pinyin fades as elsewhere). The learner answers by tapping (beginner), typing, or speaking; speech is matched to the acceptable replies with `compareSpeech`, and a near match gets a gentle recast. Each finished scene offers a replay with pinyin hidden.
 - **Progress:** each scene line is an item in a `converse` mode, so it is graded and scheduled; words met and characters are credited.
@@ -37,6 +37,6 @@ engine.reply(state, utterance)    // utterance = { text, via: 'choice' | 'speech
 - **Evaluation before shipping:** a fixed set of learner turns per scene, run through the model; measured: share of characters above level, JSON validity, latency on a mid-range phone, and a native-speaker review of a sample. It ships only when it beats agreed thresholds.
 
 ## Status
-- [ ] Phase 1: scripted scenes
+- [x] Phase 1: scripted scenes (12 scenes, `converse` mode, screen at `#talk`)
 - [ ] Phase 2: free-speech matching, reply probabilities
 - [ ] Phase 3: open conversation with a model

@@ -6,6 +6,7 @@ An installable web app for Android, iPhone and computers, designed in an "Ink & 
 - **Shadowing**: listen and repeat. Your pitch is drawn over the target tone shapes, you can play yourself against the native voice, and "Check my words" marks each syllable, including tone slips (买 mǎi said as 卖 mài).
 - **Listening**: pick what you heard among near-identical sentences, then type it from dictation once you know it.
 - **Translation (English → Chinese)**: choose between near-misses first, then write it yourself. Hint tiles include decoys.
+- **Conversation**: twelve everyday scenes (four per HSK level): ordering food, buying a ticket, asking the way, the doctor's, a hotel… The other person speaks (tone shapes, fading pinyin, English underneath); you reply by tapping among near-misses, typing (characters or pinyin), or speaking. A near miss gets a gentle recast: the line said back to you, with the slipped syllables marked. Each finished scene can be replayed without pinyin. Scenes open with your level, and every reply is graded and reviewed like any other item.
 - **Tones**: name a syllable's tone inside a sentence with brush-stroke buttons (with 一/不/3+3 changes), and practise word tones, then say them.
 - **Fading pinyin**: once you've got a character right several times, its pinyin hides everywhere (tap a sentence to peek). New characters are underlined in red.
 - **Seal stamp & ink**: a correct answer spreads ink and presses a red 对 seal. Soft brush sounds (can be turned off).
@@ -16,7 +17,7 @@ An installable web app for Android, iPhone and computers, designed in an "Ink & 
 - **Levels that fit beginners and veterans**: a short adaptive placement (4 questions for a beginner, up to 12 for a veteran, with a "Not sure" button). Levels unlock at 80% accuracy and step back by themselves if a level turns out too hard.
 - **No vocabulary skipped**: new sentences are chosen to bring one or two words you haven't met. Veterans still get a few sentences from earlier levels as quick checks: right once and they go away for three weeks, wrong and they're learned like new. Progress shows how many HSK 1–3 words you've met.
 
-Content: 111 hand-written sentences with 333 near-miss distractors, all 595 HSK 1–3 words, stroke data for 631 characters.
+Content: 375 hand-written sentences with near-miss distractors, 12 conversation scenes, all 595 HSK 1–3 words, stroke data for 631 characters.
 
 ---
 
@@ -50,6 +51,8 @@ The storage layer is built for real sync: see **SYNC.md**.
 ## Editing content
 - Sentences live in `src/sentences.src.js`, one line per sentence:
   `[level, chinese, english, [other correct answers], [[distractor, why it's wrong] ×3], grammar tag]`
+- Conversation scenes live in `src/dialogues.src.js`, one object per scene (format at the top of the file). Each line the other person says lists 2–3 acceptable replies; each reply names the next line and has 3 near-miss distractors with a reason, plus optional other accepted wordings: `[chinese, english, next, [[distractor, why] ×3], [other wordings]]`. The last line has `'end'` instead of replies. Keep node names stable: progress is stored per reply.
+- The build refuses scenes with unreachable lines, dead ends, loops, missing English, or a distractor that is really an accepted reply, and warns about characters above the scene's HSK level (`npm test` fails on those too). It prints how many replies each route takes (aim for 6–8).
 - Then run `npm install` and `npm run build`. This regenerates `docs/data/*.js` with pinyin, tone changes and neutral tones.
 - Run `npm test` for the logic tests, and `npm run serve` to try the app at http://localhost:8000.
 - `npm run build` also stamps `VERSION` in `docs/sw.js` with a hash of the app files, so installed apps pick up updates automatically. CI fails if `docs/` is out of date.

@@ -7,14 +7,16 @@
   const SENT = window.SENTENCES;
   const WORDS = window.WORDS.filter(w => [...w.h].length <= 4);
   const WORDSET = new Set(window.WORDS.map(w => w.h));
-  attachWords(SENT, window.WORDS); attachWords(WORDS, window.WORDS); // lets sessions track which words you've met
+  const SCENES = window.DIALOGUES || [];
+  const TALK = Dialogue.replyItems(SCENES); // every learner reply in every scene: the items of the `converse` mode
+  attachWords(SENT, window.WORDS); attachWords(WORDS, window.WORDS); attachWords(TALK, window.WORDS); // lets sessions track which words you've met
   const view = document.getElementById('view');
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   // ---------------- settings & look ----------------
-  const DEFAULTS = { pinyin: 'fade', toneMarks: true, ink: 'auto', texture: true, sounds: true, rate: 0.85, voice: '', autoplay: true, hideShadow: true, size: 12 };
+  const DEFAULTS = { pinyin: 'fade', toneMarks: true, ink: 'auto', texture: true, sounds: true, rate: 0.85, voice: '', autoplay: true, hideShadow: true, size: 12, talkInput: 'tap' };
   const setting = k => store.get('settings', k, DEFAULTS[k]);
   const setSetting = (k, v) => { store.put('settings', k, v); applyLook(); };
   const darkMQ = window.matchMedia ? matchMedia('(prefers-color-scheme: dark)') : null;
@@ -29,6 +31,11 @@
   applyLook();
   TTS.pick(setting('voice'));
 
+  /** A segmented control bound to a setting. opts: [[value, label, disabled?], …] */
+  const segHTML = (k, opts) => `<span class="seg" data-seg="${k}">${opts.map(([v, l, off]) => `<button data-v="${v}" class="${setting(k) === v ? 'on' : ''}" ${off ? 'disabled' : ''}>${l}</button>`).join('')}</span>`;
+  function wireSegs(root, after) {
+    $$('[data-seg]', root).forEach(s => $$('button', s).forEach(b => b.onclick = () => { setSetting(s.dataset.seg, b.dataset.v); $$('button', s).forEach(x => x.classList.toggle('on', x === b)); after && after(s.dataset.seg, b.dataset.v); }));
+  }
   function toast(msg, ms = 2600) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), ms); }
   const say = (text, slow) => TTS.speak(text, slow ? Math.max(0.5, setting('rate') - 0.3) : setting('rate'));
   const hanOnly = sy => sy.filter(x => x.p && !x.er);
@@ -84,13 +91,14 @@
   const brushSVG = (t, w = 96, h = 40, sw = 7) => `<svg width="${w}" height="${h}" viewBox="0 0 96 40" aria-hidden="true"><path d="${BRUSH[t]}" stroke-width="${sw}" fill="none" stroke-linecap="round"/></svg>`;
   const TONE_WORD = { 1: 'high', 2: 'rising', 3: 'dip', 4: 'falling', 0: 'light' };
 
-  /** Render a sentence. o.pinyin: 'auto' (fade setting) | true | false; o.focus: syllable index; o.status: index→{st,label} */
+  /** Render a sentence. o.pinyin: 'auto' (fade setting) | true | false; o.focus: syllable index; o.status: index→{st,label};
+   *  o.glue: keep punctuation on the line of the syllable before it (for narrow boxes) */
   function sentHTML(sy, o = {}) {
     const mode = o.pinyin == null ? 'auto' : o.pinyin;
     const pset = setting('pinyin');
     const hideAll = mode === false || (mode === 'auto' && pset === 'hide');
     const cls = ['sent', o.small ? 'sm' : '', hideAll ? 'nopy' : '', (o.marks ?? setting('toneMarks')) ? '' : 'notm', o.blur ? 'blur' : ''].join(' ');
-    return `<div class="${cls}" data-sent>` + sy.map((x, i) => {
+    const parts = sy.map((x, i) => {
       if (!x.p) return `<span class="syl punct"><span class="tm"></span><span class="py"></span><span class="hz">${esc(x.c)}</span></span>`;
       const st = o.status && o.status[i];
       const faded = mode === 'auto' && pset === 'fade' && !x.er && mastered(x.c);
@@ -99,7 +107,9 @@
       return `<span class="syl ${faded ? 'faded' : ''} ${fresh ? 'newword' : ''} ${o.focus === i ? 'focus' : ''} ${st ? 'st-' + st.st : ''}">` +
         (x.er ? '<span class="tm"></span>' : toneSVG(x.s)) + `<span class="py pinyin">${esc(py)}</span><span class="hz">${esc(x.c)}</span>` +
         (o.status ? `<span class="fb">${st ? esc(st.label || '') : ''}</span>` : '') + '</span>';
-    }).join('') + '</div>';
+    });
+    if (o.glue) for (let i = parts.length - 1; i > 0; i--) if (!sy[i].p && sy[i - 1].p) parts.splice(i - 1, 2, `<span class="glue">${parts[i - 1]}${parts[i]}</span>`);
+    return `<div class="${cls}" data-sent>` + parts.join('') + '</div>';
   }
   view.addEventListener('click', e => {
     const s = e.target.closest('[data-sent]'); if (!s) return;
@@ -217,18 +227,35 @@
   }
 
   // ---------------- speech check ----------------
-  async function speechCheck(btn, sy, onResult) {
-    if (!Recognizer.supported) { toast('Word checking needs Chrome or Safari.'); return; }
-    if (btn.dataset.busy) { Recognizer.stop(); return; }
-    TTS.stop(); btn.dataset.busy = '1'; const label = btn.textContent; btn.textContent = 'Listening… tap when done';
+  /** Listen once with the recogniser; `score` ranks its guesses. Resolves to the text heard, or null. Tapping again stops. */
+  async function hear(btn, score, busy = on => { if (on) { btn._label = btn.textContent; btn.textContent = 'Listening… tap when done'; } else btn.textContent = btn._label; }) {
+    if (!Recognizer.supported) { toast('Word checking needs Chrome or Safari.'); return null; }
+    if (btn.dataset.busy) { Recognizer.stop(); return null; }
+    TTS.stop(); btn.dataset.busy = '1'; busy(true);
+    let text = null;
     try {
-      const text = await Recognizer.listen({ pickBest: alts => alts.map(a => [a, ZH.compareSpeech(sy, a).score]).sort((a, b) => b[1] - a[1])[0][0] });
-      onResult(ZH.compareSpeech(sy, text));
+      text = await Recognizer.listen({ pickBest: alts => alts.map(a => [a, score(a)]).sort((a, b) => b[1] - a[1])[0][0] });
     } catch (e) {
       const m = e.message;
       toast(m === 'no-speech' ? "Didn't catch anything — speak right after tapping." : m === 'not-allowed' || m === 'service-not-allowed' ? 'Speech recognition was refused in browser settings.' : m === 'network' ? 'Word checking needs internet.' : 'Speech check failed (' + m + ').', 3600);
     }
-    delete btn.dataset.busy; btn.textContent = label;
+    delete btn.dataset.busy; busy(false);
+    return text;
+  }
+  async function speechCheck(btn, sy, onResult) {
+    const text = await hear(btn, a => ZH.compareSpeech(sy, a).score);
+    if (text != null) onResult(ZH.compareSpeech(sy, text));
+  }
+  /** Speech results feed the tone statistics in Progress. */
+  function logSpeech(item, r) {
+    store.log({ type: 'speech', item, score: r.score });
+    for (const s of r.syl) if (s.t && (s.st === 'tone' || s.st === 'ok')) store.log({ type: 'toneSpeech', tone: s.t, said: s.st === 'ok' ? s.t : s.heard.t });
+  }
+  /** Syllable marks for a speech result, as sentHTML's `status`. */
+  function speechStatus(sy, r) {
+    const status = {};
+    r.syl.forEach(s => { status[sy.indexOf(s.ref)] = { st: s.st, label: s.st === 'ok' ? '✓' : s.st === 'tone' ? TONE_WORD[s.heard.t] : s.st === 'miss' ? '—' : '✗' }; });
+    return status;
   }
 
   // ---------------- sessions ----------------
@@ -346,15 +373,20 @@
     });
   }
 
-  function typedResult(el, r, input, it, q, grade, next) {
+  /** The learner's typed answer against the closest correct one (checkTyped result r), as a marked-up diff. */
+  function typedDiff(r, input) {
     const t = r.answer;
     const targetCmp = r.hasHan ? [...t.zh].filter(isHan).join('') : t.sy.filter(x => x.p).map(x => x.er ? 'r' : ZH.stripTone(x.p)).join('');
     const userCmp = r.hasHan ? [...input].filter(isHan).join('') : ZH.parsePinyin(input).toneless;
+    return diffHTML(userCmp, targetCmp);
+  }
+  function typedResult(el, r, input, it, q, grade, next) {
+    const t = r.answer;
     const head = r.exact ? (r.toneErr ? 'Correct, tones too.' : 'Correct.') : r.close ? 'Almost.' : 'Not quite.';
     let tones = '';
     if (r.toneErr && r.toneErr.length) { const T = hanOnly(t.sy); tones = `<p class="small" style="margin:6px 0 0">Tone slips: ${r.toneErr.map(i => `<b class="zh">${esc(T[i].c)}</b> is <span class="pinyin">${esc(T[i].p)}</span>`).join(', ')}</p>`; }
     el.innerHTML = `<div class="result fadein"><p class="head">${head}</p>
-      ${!r.exact ? `<p class="tiny muted" style="margin:0 0 4px">Yours against the answer: <del style="color:var(--seal)">extra</del> · <ins style="text-decoration:none;color:var(--ok)">missing</ins></p>${diffHTML(userCmp, targetCmp)}` : ''}${tones}
+      ${!r.exact ? `<p class="tiny muted" style="margin:0 0 4px">Yours against the answer: <del style="color:var(--seal)">extra</del> · <ins style="text-decoration:none;color:var(--ok)">missing</ins></p>${typedDiff(r, input)}` : ''}${tones}
       <div class="card" style="margin-top:14px">${sentHTML(t.sy, { pinyin: true, small: true })}<p class="en" style="font-size:18px">${esc(it.en)}</p></div>
       <div class="row" style="margin-top:8px"><button class="btn small" data-hear>${ICON.play}&nbsp;Hear it</button>${q < 2 ? '<button class="linkbtn" data-ov>My answer was also right</button>' : ''}</div></div>`;
     let done = false; const g = qq => { if (!done) { done = true; grade(qq); } };
@@ -385,15 +417,12 @@
     recorder($('[data-graph]', host), $('[data-ctl]', host), T, it.zh);
     $('[data-slow2]', host).onclick = () => say(it.zh, true);
     $('[data-check]', host).onclick = e => speechCheck(e.target, it.sy, r => {
-      const status = {};
-      r.syl.forEach(s => { status[it.sy.indexOf(s.ref)] = { st: s.st, label: s.st === 'ok' ? '✓' : s.st === 'tone' ? TONE_WORD[s.heard.t] : s.st === 'miss' ? '—' : '✗' }; });
-      $('[data-s]', host).innerHTML = sentHTML(it.sy, { status, pinyin: true });
+      $('[data-s]', host).innerHTML = sentHTML(it.sy, { status: speechStatus(it.sy, r), pinyin: true });
       const te = r.syl.filter(s => s.st === 'tone'), wr = r.syl.filter(s => s.st === 'wrong' || s.st === 'miss');
       $('[data-fb]', host).innerHTML = `<div class="note fadein"><p><b>${Math.round(r.score * 100)}% understood.</b> ${te.map(s => `<span class="zh">${esc(s.c)}</span> came out ${TONE_WORD[s.heard.t]} (${esc(ZH.markTone(s.b, s.heard.t))}); it should ${s.t === 3 ? 'dip' : s.t === 1 ? 'stay high' : s.t === 2 ? 'rise' : s.t === 4 ? 'fall' : 'be light'}.`).join(' ')}${wr.length ? ` Not heard: <span class="zh">${wr.map(s => esc(s.c)).join(' ')}</span>.` : ''}${!te.length && !wr.length ? ' Clean.' : ''}</p></div>`;
       suggest = r.score >= .95 ? 3 : r.score >= .75 ? 2 : 0; drawGrades();
       if (r.score >= .95) celebrate(null, host); else if (r.score < .6) missed();
-      store.log({ type: 'speech', item: it.id, score: r.score });
-      for (const s of r.syl) if (s.t && (s.st === 'tone' || s.st === 'ok')) store.log({ type: 'toneSpeech', tone: s.t, said: s.st === 'ok' ? s.t : s.heard.t });
+      logSpeech(it.id, r);
     });
     drawGrades();
     if (setting('autoplay')) say(it.zh);
@@ -517,7 +546,196 @@
     translate: { title: 'Translation', pool: () => SENT, render: renderTranslate, sub: 'English to Chinese, no word bank' },
     tone: { title: 'Tones in sentences', pool: () => SENT, render: renderToneSpot, sub: 'One syllable, as it is really said' },
     wordtone: { title: 'Word tones', pool: () => WORDS, render: renderWordTone, sub: 'Hear a word, then say it' },
+    // Conversation has its own screen (#talk); its items are the learner's replies, graded like any other mode.
+    converse: { title: 'Conversation', pool: () => TALK, open: () => { location.hash = '#talk'; }, sub: 'Short scenes: tap, type or say your reply' },
   };
+
+  // ---------------- conversation ----------------
+  // A scene is played through a DialogueEngine (dialogue.js): the screen only sees its turns, never the script.
+  const engine = new Dialogue.ScriptedEngine();
+  let talk = null;
+  const INPUTS = () => [['tap', 'Tap'], ['type', 'Type'], ['speak', 'Speak', !Recognizer.supported]];
+  const talkInput = () => { const v = setting('talkInput'); return v === 'speak' && !Recognizer.supported ? 'tap' : v; };
+  // Learners who were placed before conversations existed start at their best sentence level.
+  if (store.get('levels', 'converse', null) == null) srs.setLevel('converse', Math.max(...['listen', 'shadow', 'translate', 'tone'].map(m => srs.level(m))));
+  const dueTalk = now => new Set(TALK.filter(it => { const p = srs.get('converse', it.id); return p && p.due <= now; }).map(it => it.id));
+
+  function viewTalk() {
+    talk = null; TTS.stop();
+    const L = srs.level('converse'), due = dueTalk(Date.now());
+    const row = sc => {
+      const rec = store.get('talk', sc.id, null), pl = Dialogue.pathLengths(sc);
+      const n = TALK.filter(it => it.scene === sc.id && due.has(it.id)).length;
+      const r = sc.l > L ? `HSK ${sc.l}` : n ? `${n} to review` : rec ? `Played${rec.n > 1 ? ' ×' + rec.n : ''}` : 'New';
+      return `<button class="scene" data-scene="${sc.id}" ${sc.l > L ? 'disabled' : ''}><span class="grow"><span class="zh t">${esc(sc.title)}</span>
+        <span class="sub">${esc(sc.en)} · ${pl.min === pl.max ? pl.min : pl.min + '–' + pl.max} replies</span></span><span class="r ${n && sc.l <= L ? 'due' : ''}">${r}</span></button>`;
+    };
+    view.innerHTML = `<div class="topline"><a class="icon-btn" href="#home" aria-label="Back">${ICON.back}</a><p class="title-zh" style="font-size:30px">对话</p><p class="lede" style="margin:0">Conversation</p></div>
+      <p class="small muted" style="margin:16px 0 0">Everyday scenes, a few lines each. Listen, then answer in Chinese.</p>
+      <div class="setting"><span class="lbl"><span>Answer by</span>${Recognizer.supported ? '' : '<small>Speaking needs Chrome or Safari</small>'}</span>${segHTML('talkInput', INPUTS())}</div>
+      ${[1, 2, 3].map(l => `<p class="eyebrow" style="margin-top:24px${l > L ? ';color:var(--ink3)' : ''}">HSK ${l}${l > L ? ' · not open yet' : ''}</p>
+        <div class="rows">${SCENES.filter(sc => sc.l === l).map(row).join('')}</div>`).join('')}
+      <p class="tiny muted" style="margin-top:16px">The next level opens once you have played every scene at yours, most replies right. You can also set it in Settings.</p>`;
+    wireSegs(view);
+    $$('[data-scene]').forEach(b => b.onclick = () => playScene(SCENES.find(sc => sc.id === b.dataset.scene)));
+  }
+
+  function playScene(sc, hidden = false) {
+    if (!sc) return;
+    TTS.stop(); session = null;
+    const learner = { level: srs.level('converse'), met: srs.metWords(), due: dueTalk(Date.now()) };
+    talk = { sc, hidden, turn: engine.start(sc, learner), results: [] };
+    document.body.classList.remove('tabbed');
+    view.innerHTML = `<div class="progressbar"><button class="icon-btn" data-quit aria-label="Leave the scene">${ICON.close}</button>
+        <div class="track"><div data-track></div></div><span class="small muted" data-count></span></div>
+      <div class="stage talk fadein" data-stage>
+        <p class="eyebrow">${esc(sc.en)}${hidden ? ' · no pinyin' : ''}</p><p class="title-zh scene-t">${esc(sc.title)}</p>
+        <p class="small muted" style="margin:6px 0 0">${esc(sc.intro)}</p>
+        <div class="chat" data-chat></div><div data-ans></div></div>`;
+    $('[data-quit]').onclick = () => { if (location.hash === '#talk') viewTalk(); else location.hash = '#talk'; };
+    window.scrollTo(0, 0);
+    talkLine();
+  }
+  const pyOpt = () => talk.hidden ? false : 'auto';
+  function talkProgress() {
+    const done = talk.results.length, total = done + talk.turn.left;
+    $('[data-track]').style.width = (done / total * 100) + '%';
+    $('[data-count]').textContent = `${Math.min(done + 1, total)} / ${total}`;
+  }
+  function bubble(cls, html) {
+    const el = document.createElement('div'); el.className = 'bub fadein ' + cls; el.innerHTML = html;
+    $('[data-chat]').appendChild(el); return el;
+  }
+  const scrollToEl = el => requestAnimationFrame(() => window.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top + window.scrollY - 72), behavior: 'smooth' }));
+
+  /** The app says its line; then the learner answers, or the scene ends. */
+  function talkLine() {
+    const tk = talk, t = tk.turn, line = t.line;
+    const el = bubble('app', `<span class="who">${esc(tk.sc.who)}</span>${sentHTML(line.sy, { pinyin: pyOpt(), glue: true })}
+      <p class="gl" ${tk.hidden ? 'hidden' : ''}>${esc(line.en)}</p>
+      <div class="acts"><button data-say aria-label="Play again">${ICON.play}Hear</button><button data-slow><span class="zh">慢</span>Slower</button>${tk.hidden ? '<button data-gl>English</button>' : ''}</div>`);
+    $('[data-say]', el).onclick = () => say(line.zh);
+    $('[data-slow]', el).onclick = () => say(line.zh, true);
+    const g = $('[data-gl]', el); if (g) g.onclick = () => { $('.gl', el).hidden = false; g.remove(); };
+    talkProgress(); scrollToEl(el);
+    if (setting('autoplay')) say(line.zh);
+    if (!t.end) return talkAnswer();
+    $('[data-ans]').innerHTML = `<button class="btn solid block fadein" data-finish style="margin-top:28px">See how it went</button>`;
+    $('[data-finish]').onclick = finishScene;
+  }
+
+  function talkAnswer(mode = talkInput()) {
+    const tk = talk, t = tk.turn, ans = $('[data-ans]');
+    ans.innerHTML = `<div class="answer fadein"><div class="row" style="justify-content:space-between"><p class="eyebrow">Your reply</p>${segHTML('talkInput', INPUTS())}</div><div data-panel></div></div>`;
+    wireSegs(ans, () => talkAnswer());
+    const panel = $('[data-panel]', ans);
+    const send = (utt, ev) => talkReplied(engine.reply(t.state, utt), utt, ev);
+    if (mode === 'tap') { // the acceptable replies among near-misses (one each from up to two replies)
+      const misses = shuffle(t.options.slice()).slice(0, 2).map(r => shuffle(r.d.slice())[0]);
+      const opts = shuffle([...t.options, ...misses].filter((o, i, a) => a.findIndex(x => x.zh === o.zh) === i));
+      panel.innerHTML = `<div class="opts">${opts.map((o, i) => `<button class="opt" data-o="${i}">${sentHTML(o.sy, { small: true, pinyin: pyOpt(), glue: true })}</button>`).join('')}</div>`;
+      $$('[data-o]', panel).forEach(b => b.onclick = ev => { $$('[data-o]', panel).forEach(x => x.disabled = true); b.classList.add('picked'); send({ text: opts[+b.dataset.o].zh, via: 'choice' }, ev); });
+      return;
+    }
+    // typing and speaking: the English of each acceptable reply is the prompt; showing the Chinese counts as help
+    let helped = false;
+    panel.innerHTML = `<p class="tiny muted" style="margin:14px 0 0">You could say</p>
+      <ul class="says">${t.options.map(r => `<li><span class="en">${esc(r.en)}</span><span data-zh hidden>${sentHTML(r.sy, { small: true, pinyin: pyOpt(), glue: true })}</span></li>`).join('')}</ul>
+      <button class="linkbtn" data-help>Show the Chinese</button><div data-in-area></div>`;
+    $('[data-help]', panel).onclick = e => { helped = true; e.currentTarget.remove(); $$('[data-zh]', panel).forEach(x => x.hidden = false); };
+    const area = $('[data-in-area]', panel);
+    if (mode === 'type') {
+      area.innerHTML = `<input class="ink-input" data-in autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Characters or pinyin" aria-label="Your reply">
+        <button class="btn solid block" data-send style="margin-top:16px">Send</button>`;
+      const inp = $('[data-in]', area), go = () => { if (!inp.value.trim()) return; inp.disabled = true; $('[data-send]', area).disabled = true; send({ text: inp.value, via: 'typed', helped }); };
+      $('[data-send]', area).onclick = go; inp.onkeydown = e => { if (e.key === 'Enter') go(); };
+      return;
+    }
+    area.innerHTML = `<div class="controls"><button class="round big" data-mic aria-label="Say your reply">${ICON.mic}</button></div>
+      <p class="small muted center" data-msg style="margin:10px 0 0">Tap the red button and say your reply.</p>
+      <p class="center" style="margin:0"><button class="linkbtn" data-tap>Show choices instead</button></p>`;
+    const mic = $('[data-mic]', area), msg = $('[data-msg]', area);
+    mic.onclick = async () => {
+      const text = await hear(mic, a => Dialogue.speechScore(t.options, a), on => { mic.classList.toggle('rec', on); mic.innerHTML = on ? ICON.stop : ICON.mic; msg.textContent = on ? 'Listening… tap when done.' : 'Tap the red button and say your reply.'; });
+      if (text != null && talk === tk) send({ text, via: 'speech', helped });
+    };
+    $('[data-tap]', area).onclick = () => talkAnswer('tap');
+  }
+
+  /** Grade the reply, show it in the chat (with any correction), then go on. */
+  function talkReplied(nt, utt, ev) {
+    const tk = talk; if (!tk) return;
+    const fb = nt.feedback, ans = $('[data-ans]');
+    if (fb.retry) { $('[data-msg]', ans).innerHTML = `I heard “<span class="zh">${esc(fb.heard.heard || '…')}</span>”. Try again, or show the choices.`; missed(); return; }
+    const r = fb.matched, q = fb.q, good = !fb.distractor && (fb.exact || q >= 2);
+    srs.grade('converse', r.id, q, { via: fb.via });
+    creditChars(r.zh, q);
+    if (fb.heard && !fb.distractor) logSpeech(r.id, fb.heard);
+    tk.results.push({ reply: r, q });
+    tk.turn = nt;
+    const small = { small: true, pinyin: pyOpt(), glue: true };
+    let said = sentHTML(r.sy, small), note = '';
+    if (fb.distractor) {
+      said = `<p class="said"><del>${esc(fb.distractor.zh)}</del></p>` + said;
+      note = esc(fb.distractor.why) + '.';
+    } else if (fb.heard) {
+      const marks = fb.heard.syl.some(s => s.st !== 'ok');
+      said = sentHTML(fb.form.sy, { small: true, glue: true, pinyin: marks || pyOpt(), status: marks ? speechStatus(fb.form.sy, fb.heard) : null });
+      if (!good) note = 'Nearly. The marked syllables slipped: listen, then say it once more.';
+    } else if (fb.typed) {
+      said = sentHTML(fb.form.sy, small);
+      if (!fb.exact) {
+        said = `<div class="said">${typedDiff(fb.typed, utt.text)}</div>` + said;
+        note = q === 1 ? 'Almost. Green is what was missing, red what was extra.' : 'Not quite. Here is one way to say it.';
+      } else if (!good) note = 'Right, with the Chinese shown.';
+    } else if (!good) note = 'Right, with the Chinese shown.';
+    const me = bubble('me' + (good ? '' : ' fix'), `${said}<p class="gl" ${tk.hidden ? 'hidden' : ''}>${esc(r.en)}</p>`);
+    scrollToEl(me);
+    if (good) {
+      celebrate(ev);
+      ans.innerHTML = '';
+      (async () => { if (setting('autoplay') && fb.via !== 'speech') await say(r.zh); if (talk === tk) talkLine(); })();
+      return;
+    }
+    if (q === 0) missed();
+    ans.innerHTML = `<div class="note fadein"><p>${note}</p></div><button class="btn solid block fadein" data-next style="margin-top:18px">Continue</button>`;
+    $('[data-next]', ans).onclick = () => { if (talk === tk) talkLine(); };
+    say(r.zh); // the recast
+  }
+
+  /** Every scene at the current level played, and most recent replies at that level right: open the next level. */
+  function talkLevelUp() {
+    const L = srs.level('converse'); if (L >= 3) return null;
+    if (!SCENES.filter(sc => sc.l === L).every(sc => store.get('talk', sc.id, null))) return null;
+    const ids = new Set(TALK.filter(it => it.l === L).map(it => it.id));
+    const recent = store.events(e => e.type === 'answer' && e.mode === 'converse' && ids.has(e.item)).slice(-20);
+    if (recent.length < 12 || recent.filter(e => e.q > 0).length / recent.length < 0.8) return null;
+    srs.setLevel('converse', L + 1); return L + 1;
+  }
+
+  function finishScene() {
+    const tk = talk; if (!tk) return;
+    talk = null; TTS.stop();
+    const n = tk.results.length, ok = tk.results.filter(x => x.q >= 2).length;
+    const prev = store.get('talk', tk.sc.id, null) || { n: 0 };
+    store.put('talk', tk.sc.id, { n: prev.n + 1, last: Date.now(), ok, of: n, hidden: tk.hidden });
+    const up = talkLevelUp(), redo = tk.results.filter(x => x.q < 2);
+    view.innerHTML = `<div class="stage fadein" data-stage style="flex:1;display:flex;flex-direction:column;gap:14px;padding-top:28px">
+      <p class="eyebrow">Scene complete${tk.hidden ? ' · no pinyin' : ''}</p>
+      <p class="title-zh" style="font-size:48px">${esc(tk.sc.title)}</p>
+      <p class="lede">${ok} of ${n} replies right first time. ${ok === n ? 'A clean page.' : 'The others come back for review soon.'}</p>
+      ${up ? `<div class="note"><p>HSK ${up} scenes are open now.</p></div>` : ''}
+      ${redo.length ? `<p class="eyebrow" style="color:var(--ink2);margin-top:8px">Say these once more</p>
+        <div class="rows">${redo.map((x, i) => `<button data-hear="${i}"><span>${sentHTML(x.reply.sy, { small: true, pinyin: true, glue: true })}<span class="sub">${esc(x.reply.en)}</span></span><span class="r">${ICON.play}</span></button>`).join('')}</div>` : ''}
+      <div class="spacer"></div>
+      <button class="btn solid block" data-replay>Play it again without pinyin</button>
+      <div class="row"><button class="btn grow" data-scenes>Other scenes</button><a class="btn grow" href="#home">Today</a></div></div>`;
+    $$('[data-hear]').forEach(b => b.onclick = () => say(redo[+b.dataset.hear].reply.zh));
+    $('[data-replay]').onclick = () => playScene(tk.sc, true);
+    $('[data-scenes]').onclick = () => { if (location.hash === '#talk') viewTalk(); else location.hash = '#talk'; };
+    window.scrollTo(0, 0);
+    if (n && ok / n >= .8) setTimeout(() => celebrate(null, $('[data-stage]')), 200); else sfx('ok');
+  }
 
   // ---------------- placement ----------------
   // Staged and adaptive: four sentences per level, moving up only after 3 of 4 right.
@@ -581,7 +799,7 @@
       <button class="begin" data-mix><span class="zh">练</span><b>Begin</b><span class="small muted">${setting('size')} items · all skills</span></button>
       <div class="rows">${Object.entries(MODES).map(([m, M]) => `<button data-mode="${m}"><span>${M.title}<span class="sub">${M.sub}</span></span><span class="r">${counts[m].due ? counts[m].due + ' due · ' : ''}HSK ${counts[m].level}</span></button>`).join('')}</div>`;
     $('[data-mix]').onclick = startMix;
-    $$('[data-mode]').forEach(b => b.onclick = () => startMode(b.dataset.mode));
+    $$('[data-mode]').forEach(b => b.onclick = () => MODES[b.dataset.mode].open ? MODES[b.dataset.mode].open() : startMode(b.dataset.mode));
     const pl = $('[data-place]'); if (pl) pl.onclick = startPlacement;
     const sk = $('[data-skip]'); if (sk) sk.onclick = () => { store.put('meta', 'placement', { done: Date.now(), level: 1, skipped: true }); viewHome(); };
   }
@@ -667,7 +885,7 @@
 
   function viewSettings() {
     TTS.loadVoices();
-    const seg = (k, opts) => `<span class="seg" data-seg="${k}">${opts.map(([v, l]) => `<button data-v="${v}" class="${setting(k) === v ? 'on' : ''}">${l}</button>`).join('')}</span>`;
+    const seg = segHTML;
     const sw = k => `<button class="switch" role="switch" data-sw="${k}" aria-checked="${!!setting(k)}" aria-label="${k}"></button>`;
     const row = (l, ctl, sub) => `<div class="setting"><span class="lbl"><span>${l}</span>${sub ? `<small>${sub}</small>` : ''}</span>${ctl}</div>`;
     view.innerHTML = `<div class="topline"><a class="icon-btn" href="#home" aria-label="Back">${ICON.back}</a><p class="title-zh" style="font-size:30px">设置</p><p class="lede" style="margin:0">Settings</p></div>
@@ -696,7 +914,7 @@
       <p class="small muted">Chinese voice ${TTS.voices.length ? '✓' : '✗'} · Word checking ${Recognizer.supported ? '✓' : '✗'} · Microphone ${Pitch.supported ? '✓' : '✗'}</p>
       <button class="btn small" data-reset>Reset all progress</button>
       <p class="tiny muted center" style="margin-top:22px">${SENT.length} sentences · ${window.WORDS.length} words · stroke data © Arphic (APL)</p>`;
-    $$('[data-seg]').forEach(s => $$('button', s).forEach(b => b.onclick = () => { setSetting(s.dataset.seg, b.dataset.v); $$('button', s).forEach(x => x.classList.toggle('on', x === b)); }));
+    wireSegs(view);
     $$('[data-sw]').forEach(b => b.onclick = () => { const v = !setting(b.dataset.sw); setSetting(b.dataset.sw, v); b.setAttribute('aria-checked', v); if (v && b.dataset.sw === 'sounds') sfx('ok'); });
     $('[data-size]').onchange = e => setSetting('size', +e.target.value);
     $$('[data-lv]').forEach(el => el.onchange = () => srs.setLevel(el.dataset.lv, +el.value));
@@ -714,10 +932,11 @@
   function route() {
     const tab = location.hash.slice(1) || 'home';
     if (session) { session = null; TTS.stop(); }
+    if (talk) { talk = null; TTS.stop(); Recognizer.stop(); }
     const tabbed = ['home', 'words', 'progress'].includes(tab);
     document.body.classList.toggle('tabbed', tabbed);
     $$('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
-    ({ home: viewHome, words: viewWords, progress: viewProgress, settings: viewSettings }[tab] || viewHome)();
+    ({ home: viewHome, words: viewWords, progress: viewProgress, settings: viewSettings, talk: viewTalk }[tab] || viewHome)();
     window.scrollTo(0, 0);
   }
   window.addEventListener('hashchange', route);
@@ -731,5 +950,6 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden) store.flush(); });
   route();
 
-  window.__app = { store, srs, start: (mode, ids) => { const M = MODES[mode]; startSession(M.title, ids.map(id => ({ mode, it: M.pool().find(x => x.id === id) }))); }, chapter: chapterPage, mix: startMix, word: id => viewWord(window.WORDS.find(w => w.id === id)) };
+  window.__app = { store, srs, start: (mode, ids) => { const M = MODES[mode]; startSession(M.title, ids.map(id => ({ mode, it: M.pool().find(x => x.id === id) }))); }, chapter: chapterPage, mix: startMix, word: id => viewWord(window.WORDS.find(w => w.id === id)),
+    play: (id, hidden) => playScene(SCENES.find(s => s.id === id), hidden), talk: () => talk && { scene: talk.sc.id, node: talk.turn.state.node, end: talk.turn.end } };
 })();
