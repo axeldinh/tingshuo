@@ -227,14 +227,18 @@
   }
 
   // ---------------- speech check ----------------
-  /** Listen once with the recogniser; `score` ranks its guesses. Resolves to the text heard, or null. Tapping again stops. */
-  async function hear(btn, score, busy = on => { if (on) { btn._label = btn.textContent; btn.textContent = 'Listening… tap when done'; } else btn.textContent = btn._label; }) {
+  /**
+   * Listen with the recogniser until the speaker is done (it waits through short pauses); `score` ranks its guesses.
+   * onPartial gets the words heard so far. Resolves to the text heard, or null. Tapping again stops.
+   */
+  async function hear(btn, score, busy = on => { if (on) { btn._label = btn.textContent; btn.textContent = 'Listening… tap when done'; } else btn.textContent = btn._label; }, onPartial) {
     if (!Recognizer.supported) { toast('Word checking needs Chrome or Safari.'); return null; }
     if (btn.dataset.busy) { Recognizer.stop(); return null; }
     TTS.stop(); btn.dataset.busy = '1'; busy(true);
     let text = null;
     try {
-      text = await Recognizer.listen({ pickBest: alts => alts.map(a => [a, score(a)]).sort((a, b) => b[1] - a[1])[0][0] });
+      // the recogniser's first guess wins ties: a later one is taken only when it answers clearly better
+      text = await Recognizer.listen({ onPartial, pickBest: alts => alts.map((a, i) => [a, score(a) - i * 0.01]).sort((a, b) => b[1] - a[1])[0][0] });
     } catch (e) {
       const m = e.message;
       toast(m === 'no-speech' ? "Didn't catch anything — speak right after tapping." : m === 'not-allowed' || m === 'service-not-allowed' ? 'Speech recognition was refused in browser settings.' : m === 'network' ? 'Word checking needs internet.' : 'Speech check failed (' + m + ').', 3600);
@@ -244,7 +248,7 @@
   }
   async function speechCheck(btn, sy, onResult) {
     const text = await hear(btn, a => ZH.compareSpeech(sy, a).score);
-    if (text != null) onResult(ZH.compareSpeech(sy, text));
+    if (text != null) onResult(ZH.compareSpeech(sy, ZH.normalizeHeard(text)));
   }
   /** Speech results feed the tone statistics in Progress. */
   function logSpeech(item, r) {
@@ -652,21 +656,36 @@
       return;
     }
     area.innerHTML = `<div class="controls"><button class="round big" data-mic aria-label="Say your reply">${ICON.mic}</button></div>
-      <p class="small muted center" data-msg style="margin:10px 0 0">Tap the red button and say your reply.</p>
+      <p class="heard-live zh center" data-live aria-live="polite"></p>
+      <p class="small muted center" data-msg style="margin:6px 0 0">Tap the red button and say your reply.</p>
       <p class="center" style="margin:0"><button class="linkbtn" data-tap>Show choices instead</button></p>`;
-    const mic = $('[data-mic]', area), msg = $('[data-msg]', area);
+    const mic = $('[data-mic]', area), msg = $('[data-msg]', area), live = $('[data-live]', area);
     mic.onclick = async () => {
-      const text = await hear(mic, a => Dialogue.speechScore(t.options, a), on => { mic.classList.toggle('rec', on); mic.innerHTML = on ? ICON.stop : ICON.mic; msg.textContent = on ? 'Listening… tap when done.' : 'Tap the red button and say your reply.'; });
-      if (text != null && talk === tk) send({ text, via: 'speech', helped });
+      const text = await hear(mic, a => Dialogue.speechScore(t.options, a), on => {
+        mic.classList.toggle('rec', on); mic.innerHTML = on ? ICON.stop : ICON.mic; mic.setAttribute('aria-label', on ? 'Done' : 'Say your reply');
+        if (on) live.textContent = '';
+        msg.textContent = on ? 'Listening. Take your time; tap when done.' : 'Tap the red button and say your reply.';
+      }, partial => { live.textContent = partial; });
+      if (text != null && talk === tk) { live.textContent = ''; send({ text, via: 'speech', helped }); }
     };
     $('[data-tap]', area).onclick = () => talkAnswer('tap');
+  }
+
+  /** Why a spoken reply wasn't taken: what was heard, and the key word that was missing (or the 不 that wasn't wanted). */
+  function retryNote(fb) {
+    const heard = fb.heard && fb.heard.heard;
+    if (!heard || !heard.trim()) return "I didn't catch anything. Try again, or show the choices.";
+    const word = w => `<span class="zh">${esc(w)}</span> <span class="pyw">${esc(ZH.syllablesOf(w).map(x => ZH.markTone(x.b, x.t)).join(' '))}</span>`;
+    const why = fb.extraNeg ? ' That says <span class="zh">不</span> or <span class="zh">没</span>, and no reply here does.'
+      : fb.missing && fb.missing.length ? ` I missed ${word(fb.missing[0])}${fb.missing[1] ? ' and ' + word(fb.missing[1]) : ''}.` : '';
+    return `I heard “<span class="zh">${esc(heard)}</span>”.${why} Try again, or show the choices.`;
   }
 
   /** Grade the reply, show it in the chat (with any correction), then go on. */
   function talkReplied(nt, utt, ev) {
     const tk = talk; if (!tk) return;
     const fb = nt.feedback, ans = $('[data-ans]');
-    if (fb.retry) { $('[data-msg]', ans).innerHTML = `I heard “<span class="zh">${esc(fb.heard.heard || '…')}</span>”. Try again, or show the choices.`; missed(); return; }
+    if (fb.retry) { $('[data-msg]', ans).innerHTML = retryNote(fb); missed(); return; }
     const r = fb.matched, q = fb.q, good = !fb.distractor && (fb.exact || q >= 2);
     srs.grade('converse', r.id, q, { via: fb.via });
     creditChars(r.zh, q);
@@ -678,10 +697,15 @@
     if (fb.distractor) {
       said = `<p class="said"><del>${esc(fb.distractor.zh)}</del></p>` + said;
       note = esc(fb.distractor.why) + '.';
+    } else if (fb.heard && fb.own && !fb.partial) {
+      // understood in the learner's own words: show what they said, then the scene's wording
+      said = `<p class="said own">${esc(fb.said || fb.heard.heard)}</p><p class="also">${good ? 'You could also say' : 'Say it like this'}</p>` + sentHTML(fb.form.sy, small);
+      if (!good) note = fb.swapped ? 'Nearly. Mind the order: it changes who does what.' : fb.heard.syl.some(s => s.st === 'tone') ? 'Nearly. Some tones slipped: listen, then say it once more.' : 'Nearly. Listen to how the scene says it.';
     } else if (fb.heard) {
       const marks = fb.heard.syl.some(s => s.st !== 'ok');
       said = sentHTML(fb.form.sy, { small: true, glue: true, pinyin: marks || pyOpt(), status: marks ? speechStatus(fb.form.sy, fb.heard) : null });
-      if (!good) note = 'Nearly. The marked syllables slipped: listen, then say it once more.';
+      if (!good) note = fb.partial ? 'Nearly. The end was cut off: the marked words were not heard. Here is the whole reply.'
+        : fb.swapped ? 'Nearly. Mind the order: it changes who does what.' : 'Nearly. The marked syllables slipped: listen, then say it once more.';
     } else if (fb.typed) {
       said = sentHTML(fb.form.sy, small);
       if (!fb.exact) {

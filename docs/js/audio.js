@@ -39,39 +39,81 @@
 
   // ---------------- Speech recognition ----------------
   const SR = global.SpeechRecognition || global.webkitSpeechRecognition;
+  const flat = s => String(s || '').replace(/[\s\p{P}]/gu, '');
+  /** Finished stretches of speech, without the repeats some engines send (Android and iOS can resend earlier text, or all of it so far, as a new result). */
+  function dedupe(segs) {
+    const out = [];
+    for (const s of segs) {
+      const t = flat(s[0]); if (!t) continue;
+      const prev = out.length ? flat(out[out.length - 1][0]) : null;
+      if (prev != null && t.startsWith(prev)) out[out.length - 1] = s; // the new result repeats and extends the last one
+      else if (prev != null && prev.endsWith(t)) continue; // already heard
+      else out.push(s);
+    }
+    return out;
+  }
+  /** Whole-utterance guesses: the best guess for every stretch, then each stretch's other guesses in turn. */
+  function candidates(segs) {
+    const top = segs.map(s => s[0]), out = [top.join('')];
+    segs.forEach((s, i) => s.slice(1).forEach(a => { if (out.length < 16) out.push(top.map((t, k) => k === i ? a : t).join('')); }));
+    return [...new Set(out)];
+  }
   const Recognizer = {
     supported: !!SR,
     current: null,
-    /** Listen once. pickBest(alternatives) chooses among the recogniser's guesses. */
-    listen({ onPartial, pickBest, maxMs = 12000 } = {}) {
+    /**
+     * Listen until the speaker is done. Recognition runs through short pauses: it stops `silenceMs` after the last
+     * word once something was heard, when stop() is called (a tap), after `quietMs` with nothing heard, or at `maxMs`.
+     * Engines that end at a pause anyway (some phones ignore continuous mode) are started again while the speaker
+     * may still be going. onPartial(text) gets everything heard so far; pickBest(guesses) chooses among whole-utterance
+     * guesses (each the recogniser's alternatives, stretch by stretch).
+     */
+    listen({ onPartial, pickBest, maxMs = 15000, silenceMs = 1800, quietMs = 8000 } = {}) {
       return new Promise((resolve, reject) => {
         if (!SR) return reject(new Error('unsupported'));
-        const r = new SR();
-        r.lang = 'zh-CN'; r.interimResults = true; r.maxAlternatives = 5; r.continuous = false;
-        let finalAlts = null, partial = '';
-        r.onresult = ev => {
-          let interim = '';
-          for (let i = ev.resultIndex; i < ev.results.length; i++) {
-            const res = ev.results[i];
-            if (res.isFinal) { finalAlts = Array.from(res).map(a => a.transcript); }
-            else interim += res[0].transcript;
-          }
-          partial = interim || (finalAlts && finalAlts[0]) || partial;
-          onPartial && onPartial(partial);
-        };
-        r.onerror = e => { this.current = null; reject(new Error(e.error || 'error')); };
-        r.onend = () => {
-          this.current = null; clearTimeout(timer);
-          const alts = finalAlts || (partial ? [partial] : []);
-          if (!alts.length) return reject(new Error('no-speech'));
+        const t0 = Date.now(), kept = [];
+        let segs = [], interim = '', last = 0, stopping = false, finished = false, restarts = 0, error = null, rec = null;
+        const all = () => dedupe([...kept, ...segs, ...(interim ? [[interim]] : [])]);
+        const heardText = () => all().map(s => s[0]).join('');
+        const finish = () => {
+          if (finished) return; finished = true; clearInterval(tick); if (this.current === rec) this.current = null;
+          const segsNow = all();
+          if (!segsNow.length) return reject(new Error(restarts && /not-allowed/.test(error || '') ? 'no-speech' : error || 'no-speech'));
+          const alts = candidates(segsNow);
           resolve(pickBest ? pickBest(alts) : alts[0]);
         };
-        const timer = setTimeout(() => { try { r.stop(); } catch (e) {} }, maxMs);
-        this.current = r;
-        try { r.start(); } catch (e) { reject(e); }
+        const start = () => {
+          const r = rec = new SR();
+          r.lang = 'zh-CN'; r.interimResults = true; r.maxAlternatives = 5;
+          try { r.continuous = true; } catch (e) {}
+          r.onresult = ev => {
+            // rebuilt from the whole list each time: engines may rewrite earlier results
+            const fin = [], int = [];
+            for (let i = 0; i < ev.results.length; i++) { const res = ev.results[i]; if (res.isFinal) fin.push(Array.from(res).map(a => a.transcript)); else int.push(res[0] ? res[0].transcript : ''); }
+            segs = fin; interim = int.join(''); last = Date.now();
+            onPartial && onPartial(heardText());
+          };
+          r.onerror = e => { if (e.error !== 'no-speech' && e.error !== 'aborted') error = e.error; };
+          r.onend = () => {
+            if (r !== rec) return;
+            kept.push(...segs, ...(interim ? [[interim]] : [])); segs = []; interim = '';
+            const now = Date.now(), any = all().length > 0;
+            const goOn = !stopping && !error && restarts < 4 && now - t0 < maxMs && (any ? now - last < silenceMs : now - t0 < quietMs);
+            if (goOn) { restarts++; try { start(); return; } catch (e) { /* this engine won't restart without a tap */ } }
+            finish();
+          };
+          this.current = r;
+          r.start();
+        };
+        const tick = setInterval(() => {
+          const now = Date.now(), any = !!heardText();
+          if (now - t0 > maxMs || (any && last && now - last > silenceMs) || (!any && now - t0 > quietMs)) this.stop();
+        }, 150);
+        this._stop = () => { stopping = true; try { rec && rec.stop(); } catch (e) { finish(); } setTimeout(finish, 1500); }; // some engines never fire onend after stop
+        try { start(); } catch (e) { clearInterval(tick); finished = true; reject(e); }
       });
     },
-    stop() { if (this.current) try { this.current.stop(); } catch (e) {} },
+    stop() { if (this._stop) { const s = this._stop; this._stop = null; s(); } else if (this.current) try { this.current.stop(); } catch (e) {} },
   };
 
   // ---------------- Pitch recording ----------------
@@ -189,6 +231,6 @@
     return slope > 0 ? 2 : 4;
   }
 
-  global.Audio2 = { TTS, Recognizer, Pitch, contour, guessTone, detectPitch };
+  global.Audio2 = { TTS, Recognizer, Pitch, contour, guessTone, detectPitch, _dedupe: dedupe, _candidates: candidates };
   if (typeof module !== 'undefined') module.exports = global.Audio2;
 })(typeof window !== 'undefined' ? window : globalThis);
