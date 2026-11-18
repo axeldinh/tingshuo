@@ -75,7 +75,7 @@ module.exports = [
     ['不吃了，谢谢。多少钱？', 'No more, thanks. How much is it?', 'bill', [['没吃了，谢谢。多少钱？', '“Not any more” is 不…了'], ['不吃了，谢谢。几钱？', 'Prices are asked with 多少钱'], ['不吃了，谢谢。多少钱吗？', 'Question-word questions don’t take 吗']]],
     ['好，我想吃一个苹果。', 'Yes, I’d like an apple.', 'apple', [['好，我想吃一本苹果。', 'Apples take 个'], ['好，我想喝一个苹果。', '喝 = drink'], ['好，我想一个苹果吃。', 'The verb comes before the object: 吃一个苹果']]],
   ]],
-  apple: ['好。这个苹果是我请你的！', 'Here you are. The apple’s on me!', [
+  apple: ['好。这个苹果，我请你吃！', 'Here you are. Have this apple on me!', [
     ['谢谢！多少钱？', 'Thank you! How much do I owe?', 'bill', [['不客气！多少钱？', '不客气 answers a thank-you; he is the one being kind'], ['谢谢！几钱？', 'Prices are asked with 多少钱'], ['谢谢！多少钱了？', '了 is out of place: 多少钱']]],
     ['太谢谢你了！我想看看多少钱。', 'Thanks so much! Could I see how much it is?', 'bill', [['太谢谢你！我想看看多少钱。', '太…了 go together: 太谢谢你了'], ['太谢谢你了！我想看见多少钱。', '看见 = to spot; “have a look” is 看看'], ['太谢谢你了！我想看看几钱。', 'Prices are asked with 多少钱']]],
   ]],
@@ -439,8 +439,8 @@ module.exports = [
     ['太谢谢你了！', 'Thank you so much!', 'end', [['太谢谢你！', '太…了 go together: 太谢谢你了'], ['谢谢你太了！', '太 goes before the verb'], ['太对不起你了！', '对不起 = sorry']]],
     ['你真是我的好朋友！', 'You’re a real friend!', 'end', [['你真是我的朋友好！', '好 goes before the noun: 好朋友'], ['你真是我的好朋友吗！', '吗 turns it into a question'], ['你正是我的好朋友！', '正是 = exactly; “really are” is 真是']]],
   ]],
-  number: ['没关系，我记得那辆车的号。我给出租车公司打电话。', 'Never mind, I remember the car’s number. I’ll call the taxi company.', [
-    ['你记得车的号？太好了！', 'You remember the number? Brilliant!', 'end', [['你忘记车的号？太好了！', '忘记 = forget'], ['你记得车的号？太坏了！', '太坏了 = that’s terrible'], ['你记得车号的？太好了！', '的 goes before 号: 车的号']]],
+  number: ['没关系，我记得车号。我给出租车公司打电话。', 'Never mind, I remember the car’s number. I’ll call the taxi company.', [
+    ['你记得车号？太好了！', 'You remember the number? Brilliant!', 'end', [['你忘记车号？太好了！', '忘记 = forget'], ['你记得车号？太坏了！', '太坏了 = that’s terrible'], ['你记得号车？太好了！', 'The word is 车号: 车 comes first']]],
     ['太谢谢你了！', 'Thank you so much!', 'end', [['太谢谢你！', '太…了 go together: 太谢谢你了'], ['谢谢你太了！', '太 goes before the verb'], ['太对不起你了！', '对不起 = sorry']]],
   ]],
   end: ['……找到了！司机说他马上送回来。', '…Found it! The driver says he’ll bring it straight back.', 'end'],
