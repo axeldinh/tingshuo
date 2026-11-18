@@ -133,16 +133,42 @@
       nsdf[lag] = m ? 2 * ac / m : 0;
     }
     let maxV = 0; for (let lag = minLag; lag <= maxLag; lag++) if (nsdf[lag] > maxV) maxV = nsdf[lag];
-    if (maxV < 0.55) return { f0: null, rms };
+    if (maxV < 0.35) return { f0: null, rms };
     // first peak above 85% of the max (avoids octave errors)
     for (let lag = minLag + 1; lag < maxLag; lag++) {
       if (nsdf[lag] >= 0.85 * maxV && nsdf[lag] >= nsdf[lag - 1] && nsdf[lag] >= nsdf[lag + 1]) {
         const a = nsdf[lag - 1], b = nsdf[lag], c = nsdf[lag + 1];
-        const shift = (a - c) / (2 * (a - 2 * b + c) || 1);
-        return { f0: sr / (lag + (isFinite(shift) ? shift : 0)), rms, clarity: b };
+        const shift = (a - c) / (2 * (a - 2 * b + c) || 1), f = sr / (lag + (isFinite(shift) ? shift : 0));
+        // below 0.55 the pitch is only a weak guess (fast pitch changes, creak): kept apart, for the tone analysis
+        return maxV < 0.55 ? { f0: null, rms, clarity: b, weak: f } : { f0: f, rms, clarity: b };
       }
     }
     return { f0: null, rms };
+  }
+
+  /**
+   * Frame-by-frame pitch analysis of a live signal at sample rate `sr`. `frame(raw, t)` takes the latest samples
+   * (at least `need` of them, newest last) and returns { t, f0, rms, cl, w } (cl: clarity 0–1, f0 null when unvoiced;
+   * w: a weak pitch guess where the clarity was too low to call it voiced).
+   * The background level is tracked as a slowly rising minimum and sets the silence gate.
+   * The recorder and the tests (which feed recordings through it) share this exact path.
+   */
+  function frameAnalyser(sr) {
+    const step = sr > 32000 ? 2 : 1, dsr = sr / step;
+    const win = new Float32Array(Math.floor(Math.min(4096 / step, dsr * 0.045)));
+    const need = win.length * step;
+    let noise = 0.002;
+    const gate = () => Math.min(0.004, Math.max(0.0006, noise * 2.5));
+    return {
+      need, get noise() { return noise; },
+      frame(raw, t) {
+        const off = raw.length - need;
+        for (let i = 0; i < win.length; i++) win[i] = raw[off + i * step] || 0;
+        const p = detectPitch(win, dsr, gate());
+        noise = Math.min(Math.max(p.rms, 0.0002), noise * 1.01);
+        return { t, f0: p.f0, rms: p.rms, cl: p.clarity || 0, w: p.weak || null };
+      },
+    };
   }
 
   const Pitch = {
@@ -155,82 +181,34 @@
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true } });
       const src = this.ctx.createMediaStreamSource(this.stream);
       const an = this.ctx.createAnalyser(); an.fftSize = 4096; src.connect(an);
-      const raw = new Float32Array(an.fftSize);
-      const sr = this.ctx.sampleRate, step = sr > 32000 ? 2 : 1, dsr = sr / step;
-      const win = new Float32Array(Math.floor(Math.min(raw.length / step, dsr * 0.045)));
+      const raw = new Float32Array(an.fftSize), fa = frameAnalyser(this.ctx.sampleRate);
       const frames = []; const t0 = performance.now();
       let rec = null, chunks = [];
       try {
         if (global.MediaRecorder) { rec = new MediaRecorder(this.stream); rec.ondataavailable = e => e.data.size && chunks.push(e.data); rec.start(); }
       } catch (e) { rec = null; }
       let voicedSeen = false, lastVoice = 0, stopped = false;
-      let noise = 0.002; // background level, tracked as a slowly rising minimum
-      const gate = () => Math.min(0.004, Math.max(0.0006, noise * 2.5));
       return new Promise(resolve => {
         const finish = () => {
           if (stopped) return; stopped = true; clearInterval(iv);
-          const done = url => { this.stream.getTracks().forEach(t => t.stop()); resolve({ frames, url, peak: Math.max(0, ...frames.map(f => f.rms)), noise }); };
+          const done = url => { this.stream.getTracks().forEach(t => t.stop()); resolve({ frames, url, peak: Math.max(0, ...frames.map(f => f.rms)), noise: fa.noise }); };
           if (rec && rec.state !== 'inactive') { rec.onstop = () => done(chunks.length ? URL.createObjectURL(new Blob(chunks, { type: rec.mimeType || 'audio/webm' })) : null); rec.stop(); }
           else done(null);
         };
         this._finish = finish;
         const iv = setInterval(() => {
           an.getFloatTimeDomainData(raw);
-          const off = raw.length - win.length * step;
-          for (let i = 0; i < win.length; i++) win[i] = raw[off + i * step];
-          const t = performance.now() - t0, p = detectPitch(win, dsr, gate());
-          noise = Math.min(Math.max(p.rms, 0.0002), noise * 1.01);
-          frames.push({ t, f0: p.f0, rms: p.rms });
-          if (p.f0) { voicedSeen = true; lastVoice = t; }
+          const f = fa.frame(raw, performance.now() - t0);
+          frames.push(f);
+          if (f.f0) { voicedSeen = true; lastVoice = f.t; }
           onFrame && onFrame(frames);
-          if (t > maxMs || (autoStop && voicedSeen && t - lastVoice > 1300)) finish();
+          if (f.t > maxMs || (autoStop && voicedSeen && f.t - lastVoice > 1300)) finish();
         }, 33);
       });
     },
     stop() { this._finish && this._finish(); },
   };
 
-  /** Turn raw frames into a smoothed contour in semitones relative to the speaker's median. */
-  function contour(frames) {
-    const maxRms = Math.max(0.01, ...frames.map(f => f.rms));
-    let v = frames.filter(f => f.f0 && f.rms > maxRms * 0.12);
-    if (v.length < 3) return null;
-    const med = median(v.map(f => f.f0));
-    let pts = v.map(f => ({ t: f.t, st: 12 * Math.log2(f.f0 / med) }));
-    for (let i = 1; i < pts.length; i++) { // octave jump repair
-      const d = pts[i].st - pts[i - 1].st;
-      if (d > 8) pts[i].st -= 12; else if (d < -8) pts[i].st += 12;
-    }
-    pts = pts.map((p, i) => ({ t: p.t, st: median(pts.slice(Math.max(0, i - 2), i + 3).map(x => x.st)) }));
-    const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
-    // split into voiced segments where gaps > 120 ms
-    const segs = []; let cur = [pts[0]];
-    for (let i = 1; i < pts.length; i++) { if (pts[i].t - pts[i - 1].t > 120) { segs.push(cur); cur = []; } cur.push(pts[i]); }
-    segs.push(cur);
-    return { pts, t0, t1, segs };
-  }
-  function median(a) { const s = a.slice().sort((x, y) => x - y); return s.length ? s[s.length >> 1] : 0; }
-
-  /** Rough tone guess for one syllable's contour points (semitones). */
-  function guessTone(pts, rangeSt) {
-    if (!pts || pts.length < 3) return null;
-    const n = pts.length, q = Math.max(1, Math.floor(n * 0.25));
-    const avg = a => a.reduce((s, p) => s + p.st, 0) / a.length;
-    const start = avg(pts.slice(0, q)), end = avg(pts.slice(-q));
-    let mi = 0; pts.forEach((p, i) => { if (p.st < pts[mi].st) mi = i; });
-    const min = pts[mi].st, mpos = mi / (n - 1);
-    const slope = end - start;
-    const dip = Math.min(start, end) - min;
-    if (mpos > 0.2 && mpos < 0.8 && dip > 1.2 && start - min > 1.2) return 3;
-    if (slope <= -2.5) return 4;
-    if (slope >= 2) return start - min > 1.5 ? 3 : 2;
-    if (Math.abs(slope) < 1.5 && Math.max(...pts.map(p => p.st)) - min < 2.5) {
-      // flat: high = 1st, low (relative to the speaker's range) = half-3rd
-      return rangeSt != null && avg(pts) < rangeSt.lo + (rangeSt.hi - rangeSt.lo) * 0.3 ? 3 : 1;
-    }
-    return slope > 0 ? 2 : 4;
-  }
-
-  global.Audio2 = { TTS, Recognizer, Pitch, contour, guessTone, detectPitch, _dedupe: dedupe, _candidates: candidates };
+  global.Audio2 = { TTS, Recognizer, Pitch, detectPitch, frameAnalyser, _dedupe: dedupe, _candidates: candidates };
   if (typeof module !== 'undefined') module.exports = global.Audio2;
 })(typeof window !== 'undefined' ? window : globalThis);

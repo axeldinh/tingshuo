@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "build": "node tools/build-data.js && node tools/stamp-sw.js",
-    "test": "node test/unit.js && node test/speech-eval.js",
+    "test": "node test/unit.js && node test/speech-eval.js && node test/tone-eval.js --check",
     "serve": "cd docs && python3 -m http.server 8000",
     "coverage": "node tools/coverage.js",
     "check:sw": "node tools/stamp-sw.js --check"

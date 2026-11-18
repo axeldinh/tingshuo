@@ -291,4 +291,45 @@ t('converse mode: graded replies count as words met, without touching other mode
   assert.strictEqual(srs.counts('listen', window.SENTENCES).due, 0);
   assert.strictEqual(srs.counts('converse', items).level, 1);
 });
+
+// ---- tone recognition: synthetic voices through the app's own pitch path ----
+require('../docs/data/tone-model.js');
+const TN = require('../docs/js/tones.js'), { synth, speaker: synSpeaker } = require('./tone-synth.js'), toneSim = require('./tone-sim.js');
+const say3 = (tones, kind, seed, extra = {}) => { const o = synth({ tones, finals: tones.map((_, i) => i === tones.length - 1), speaker: synSpeaker(kind, seed), snrDb: 35, gain: 0.2, ...extra }, seed); return { frames: toneSim.record(o.samples, o.sr, { seed }), truth: o.truth }; };
+const sylsOf = tones => tones.map((s, i) => ({ c: 'x', s, final: i === tones.length - 1 }));
+t('tones: segmentation finds each syllable of a word and a sentence', () => {
+  for (const [tones, kind, seed] of [[[4, 3, 1], 'female', 11], [[1, 2, 0, 4, 3, 1, 2], 'male', 12], [[3, 4, 0, 1, 1, 2], 'child', 13]]) {
+    const { frames, truth } = say3(tones, kind, seed), trk = TN.track(frames), seg = TN.segment(trk, sylsOf(tones));
+    let ok = 0;
+    seg.forEach((sg, k) => { if (!sg) return; const mid = (trk.pts[sg[0]].t + trk.pts[sg[1]].t) / 2 - 22; if (mid >= truth[k].t0 && mid <= truth[k].t1) ok++; });
+    assert(ok >= tones.length - 1, `${tones.join('')}: ${ok}/${tones.length} syllables found`);
+  }
+});
+t('tones: too few or too many syllables degrade gracefully', () => {
+  const one = say3([4], 'female', 21);
+  const r = TN.analyse(one.frames, sylsOf([2, 4, 1]), null).syls;
+  assert.strictEqual(r.length, 3); assert(r.filter(x => x.verdict !== 'ok').length >= 2, 'two of three syllables were never said');
+  const three = say3([1, 4, 2], 'male', 22);
+  assert.strictEqual(TN.analyse(three.frames, sylsOf([4]), null).syls.length, 1);
+  assert(TN.analyse([], sylsOf([1, 2]), null).syls.every(x => x.verdict === 'unsure'));
+});
+t('tones: each tone said alone is recognised, and a different target is not passed', () => {
+  let ok = 0, n = 0, passedWrong = 0;
+  for (const kind of ['female', 'male', 'child']) for (const tone of [1, 2, 3, 4]) {
+    const seed = 100 + tone * 7 + kind.length, { frames } = say3([tone], kind, seed), hist = TN.updateRange(TN.updateRange(null, TN.track(say3([1, 4, 2, 3], kind, seed + 1).frames)), TN.track(say3([4, 1, 3], kind, seed + 2).frames));
+    const r = TN.analyse(frames, sylsOf([tone]), hist).syls[0]; n++; if (r.verdict === 'ok' && r.heard === tone) ok++;
+    const w = TN.analyse(frames, sylsOf([tone === 4 ? 1 : 4]), hist).syls[0]; if (w.verdict === 'ok') passedWrong++;
+  }
+  assert(ok >= n - 2, `${ok}/${n} recognised`); assert(passedWrong <= 1, `${passedWrong} wrong targets passed`);
+});
+t('tones: a learned pitch range settles on the speaker', () => {
+  let h = null; for (let i = 0; i < 6; i++) h = TN.updateRange(h, TN.track(say3([1, 4, 2, 3, 1], 'male', 300 + i).frames));
+  let f = null; for (let i = 0; i < 6; i++) f = TN.updateRange(f, TN.track(say3([1, 4, 2, 3, 1], 'female', 300 + i).frames));
+  assert(f.mid - h.mid > 6, `female ${f.mid.toFixed(1)} vs male ${h.mid.toFixed(1)} semitones`); assert(h.k === 6 && h.span >= 5 && h.span <= 16);
+});
+t('tones: sentence targets mark phrase ends and 3rd tones that may change', () => {
+  const T = TN.targetsOf(S('这件衣服太贵了，有便宜一点儿的吗？').sy);
+  assert.strictEqual(T.filter(x => x.final).length, 2); assert(T[T.findIndex(x => x.c === '了')].final);
+  assert(TN.targetsOf(S('这儿有很多人。').sy).find(x => x.c === '有').alt.includes(2));
+});
 console.log(n, 'tests passed');

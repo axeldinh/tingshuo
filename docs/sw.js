@@ -1,7 +1,7 @@
 // Offline cache. Bump VERSION whenever you change any file so phones pick up the update.
-const VERSION = 'tingshuo-34598abc';
+const VERSION = 'tingshuo-03c4ae45';
 const FILES = ['./', 'index.html', 'css/app.css', 'manifest.webmanifest', 'vendor/pinyin-pro.js', 'vendor/hanzi-writer.min.js', 'data/words.js', 'data/sentences.js', 'data/dialogues.js',
-  'js/store.js', 'js/srs.js', 'js/chinese.js', 'js/audio.js', 'js/dialogue.js', 'js/app.js', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
+  'js/store.js', 'js/srs.js', 'js/chinese.js', 'js/audio.js', 'data/tone-model.js', 'js/tones.js', 'js/dialogue.js', 'js/app.js', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 // The optional meaning model (js/meaning.js) is never precached: its library is kept in its own cache once fetched
 // (the model files are kept by the library itself, in 'transformers-cache'), and both survive app updates.

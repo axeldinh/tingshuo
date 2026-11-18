@@ -3,7 +3,7 @@
   'use strict';
   const store = createStore();
   const srs = createSRS(store);
-  const { TTS, Recognizer, Pitch, contour, guessTone } = window.Audio2;
+  const { TTS, Recognizer, Pitch } = window.Audio2;
   const SENT = window.SENTENCES;
   const WORDS = window.WORDS.filter(w => [...w.h].length <= 4);
   const WORDSET = new Set(window.WORDS.map(w => w.h));
@@ -153,23 +153,38 @@
   const missed = () => sfx('no');
 
   // ---------------- pitch graph (ink style) ----------------
+  // Target shapes (x: time across the syllable, y: 0 low – 1 high). A 3rd tone dips fully only at the end of a phrase;
+  // elsewhere it stays low (half-third). A light (neutral) syllable sits relative to the tone before it.
   const TARGET = { 1: [[0, .86], [1, .86]], 2: [[0, .45], [1, .9]], 4: [[0, .95], [1, .15]], 3: [[0, .32], [.55, .06], [1, .14]], '3f': [[0, .35], [.5, .06], [1, .45]] };
-  function drawGraph(canvas, syls, cont, live) {
+  const NEUTRAL_Y = { 1: .45, 2: .55, 3: .72, 4: .22, 0: .4 };
+  const MARK = { ok: '✓', slip: '✗', unsure: '?' };
+  /**
+   * Draws each syllable's target shape in its own slot and, from an analysis (Tones.analyse), the learner's pitch for
+   * that syllable inside the same slot, so each part is compared with the right shape. `live` frames: dots while recording.
+   */
+  function drawGraph(canvas, syls, an, live) {
     const dpr = window.devicePixelRatio || 1, W = canvas.clientWidth || 300, H = canvas.clientHeight || 150;
     canvas.width = W * dpr; canvas.height = H * dpr;
     const g = canvas.getContext('2d'); g.scale(dpr, dpr); g.clearRect(0, 0, W, H);
     const css = getComputedStyle(document.documentElement), col = v => css.getPropertyValue(v).trim();
-    const top = 8, bot = H - 24, y = v => bot - v * (bot - top);
+    const top = an ? 20 : 8, bot = H - 24, y = v => bot - v * (bot - top);
     const weights = syls.map(x => x.s === 0 ? 0.55 : 1), tw = weights.reduce((a, b) => a + b, 0) || 1;
     let x0 = 6; const xs = weights.map(w => { const a = x0; x0 += w / tw * (W - 12); return [a, x0]; });
+    const pad = (a, b) => Math.min(6, (b - a) * 0.15);
+    const res = an && an.syls;
     syls.forEach((s, i) => {
-      const [a, b] = xs[i];
-      let shape = s.s === 3 && i === syls.length - 1 ? TARGET['3f'] : TARGET[s.s];
-      if (s.s === 0) { const prev = i ? syls[i - 1].s : 1; const v = { 1: .45, 2: .55, 3: .72, 4: .22, 0: .4 }[prev]; shape = [[0, v], [1, v - .05]]; }
+      const [a, b] = xs[i], p = pad(a, b), r = res && res[i];
+      const tone = r && r.verdict === 'ok' && s.alt && s.alt.includes(r.heard) ? r.heard : s.s; // a 3rd tone that may change: the form they used
+      let shape = tone === 3 && (s.final || i === syls.length - 1) ? TARGET['3f'] : TARGET[tone];
+      if (s.s === 0) { const v = NEUTRAL_Y[i ? syls[i - 1].s : 0]; shape = [[0, v], [1, v - .05]]; }
       g.strokeStyle = col('--rule'); g.lineWidth = 8; g.lineCap = 'round'; g.lineJoin = 'round';
-      g.beginPath(); shape.forEach(([px, py], k) => { const X = a + 6 + px * (b - a - 12), Y = y(py); k ? g.lineTo(X, Y) : g.moveTo(X, Y); }); g.stroke();
-      g.fillStyle = s.bad ? col('--seal') : col('--ink2'); g.font = `15px ${col('--serif-zh')}`; g.textAlign = 'center';
+      g.beginPath(); shape.forEach(([px, py], k) => { const X = a + p + px * (b - a - 2 * p), Y = y(py); k ? g.lineTo(X, Y) : g.moveTo(X, Y); }); g.stroke();
+      g.fillStyle = r && r.verdict === 'slip' ? col('--seal') : s.bad ? col('--seal') : col('--ink2'); g.font = `15px ${col('--serif-zh')}`; g.textAlign = 'center';
       g.fillText(s.c, (a + b) / 2, H - 5);
+      if (r) {
+        g.font = `600 12px ${col('--sans')}`; g.fillStyle = r.verdict === 'slip' ? col('--seal') : r.verdict === 'ok' ? col('--ok') : col('--ink3');
+        g.fillText(MARK[r.verdict], (a + b) / 2, 12);
+      }
     });
     if (live && live.length) {
       const pts = live.filter(f => f.f0);
@@ -180,45 +195,77 @@
         pts.forEach((f, k) => { g.beginPath(); g.arc(6 + f.t / t1 * (W - 12), y(.08 + .84 * (st[k] - lo) / Math.max(4, hi - lo)), 2, 0, 7); g.fill(); });
       }
     }
-    if (cont) {
-      const all = cont.pts.map(p => p.st).sort((a, b) => a - b);
-      const lo = all[Math.floor(all.length * .05)], hi = all[Math.floor(all.length * .95)];
-      const span = Math.max(5, hi - lo), mid = (lo + hi) / 2;
-      const Y = st => y(Math.max(0, Math.min(1, .5 + (st - mid) / span * .8)));
-      const X = t => 6 + (t - cont.t0) / Math.max(1, cont.t1 - cont.t0) * (W - 12);
-      g.strokeStyle = col('--ink'); g.lineWidth = 2.4; g.lineCap = 'round';
-      cont.segs.forEach(seg => { g.beginPath(); seg.forEach((p, k) => k ? g.lineTo(X(p.t), Y(p.st)) : g.moveTo(X(p.t), Y(p.st))); g.stroke(); });
+    if (res && an.ref) {
+      // the speaker's range (this recording and earlier ones) maps onto the targets' low–high scale
+      const lo = an.ref.mid - an.ref.span / 2, Y = st => y(Math.max(0, Math.min(1, .08 + .84 * (st - lo) / an.ref.span)));
+      g.lineWidth = 2.4; g.lineCap = 'round'; g.lineJoin = 'round';
+      res.forEach((r, i) => {
+        const P = r.pts; if (!P || P.length < 2) return;
+        const [a, b] = xs[i], p = pad(a, b), t0 = P[0].t, T = Math.max(1, P[P.length - 1].t - t0);
+        g.strokeStyle = r.verdict === 'slip' ? col('--seal') : col('--ink');
+        g.beginPath(); P.forEach((q, k) => { const X = a + p + (q.t - t0) / T * (b - a - 2 * p); k ? g.lineTo(X, Y(q.st)) : g.moveTo(X, Y(q.st)); }); g.stroke();
+      });
     }
   }
 
-  /** Graph + record/play controls. host gets the graph; controls go into ctlHost. */
+  // ---------------- tone feedback in plain words ----------------
+  const HEARD = { 1: 'high and level', 2: 'rising', 3: 'low', 4: 'falling' };
+  const SHOULD = (s, final) => s.s === 0 ? 'be light and short' : s.s === 3 ? (s.alt ? 'dip or rise' : final ? 'dip low and come back up' : 'stay low') : { 1: 'stay high and level', 2: 'rise', 4: 'fall' }[s.s];
+  /** Feedback for one analysed recording: what each slipped syllable sounded like, and which ones were unclear. */
+  function toneFeedback(syls, an) {
+    const res = an.syls, slips = [], unsure = [];
+    res.forEach((r, i) => { if (r.verdict === 'slip') slips.push(i); else if (r.verdict === 'unsure') unsure.push(i); });
+    const okN = res.filter(r => r.verdict === 'ok').length;
+    const parts = slips.map(i => {
+      const s = syls[i], fin = s.final || i === syls.length - 1, h = res[i].heard;
+      const heard = h === 3 && fin ? 'dipped' : h === 0 ? 'light' : HEARD[h];
+      const why = s.t != null && s.t !== s.s ? ` (${s.c} changes tone here)` : '';
+      return `<span class="zh">${esc(s.c)}</span> sounded ${heard}; it should ${SHOULD(s, fin)}${why}.`;
+    });
+    let head = !slips.length && !unsure.length ? 'Every tone matched.' : !slips.length ? `${okN} of ${res.length} tones matched.` : '';
+    const list = ix => `<span class="zh">${ix.map(i => esc(syls[i].c)).join(' ')}</span>`;
+    const unheard = unsure.filter(i => !res[i].p), unclearTone = unsure.filter(i => res[i].p);
+    let unclear = (unheard.length ? ` I couldn't hear ${list(unheard)} clearly.` : '') + (unclearTone.length ? ` I'm not sure about the tone of ${list(unclearTone)}.` : '');
+    if (unsure.length === res.length) unclear += ' Try again a little slower, a bit closer to the phone.';
+    return { html: `<div class="note fadein"><p>${head}${head && parts.length ? ' ' : ''}${parts.join(' ')}${unclear}</p></div>`, slips: slips.length, unsure: unsure.length, ok: okN };
+  }
+
+  /** Graph + record/play controls. host gets the graph; controls go into ctlHost. onDone(analysis, feedback) after each take. */
   function recorder(graphHost, ctlHost, syls, nativeText, onDone) {
     graphHost.innerHTML = `<div class="graphcard"><canvas class="graph"></canvas>
-      <div class="legend"><span><i style="background:var(--rule);height:6px"></i>target</span><span><i style="background:var(--ink)"></i>you</span><span data-msg>Tap the red button and speak.</span></div></div>`;
+      <div class="legend"><span><i style="background:var(--rule);height:6px"></i>target</span><span><i style="background:var(--ink)"></i>you</span><span data-msg>Tap the red button and speak.</span></div></div>
+      <div data-tfb></div>`;
     ctlHost.innerHTML = `<div class="controls">
       <button class="round" data-native aria-label="Play the sentence">${ICON.play}</button>
       <button class="round big" data-rec aria-label="Record yourself">${ICON.mic}</button>
       <button class="round" data-mine aria-label="Play your recording" disabled>Me</button></div>`;
-    const cv = $('canvas', graphHost), msg = $('[data-msg]', graphHost), rec = $('[data-rec]', ctlHost), mine = $('[data-mine]', ctlHost);
-    let audio = null, recording = false;
+    const cv = $('canvas', graphHost), msg = $('[data-msg]', graphHost), fb = $('[data-tfb]', graphHost), rec = $('[data-rec]', ctlHost), mine = $('[data-mine]', ctlHost);
+    let audio = null, recording = false, last = null;
     requestAnimationFrame(() => drawGraph(cv, syls));
+    if (window.ResizeObserver) { let w = 0; new ResizeObserver(() => { if (cv.clientWidth !== w && !recording) { w = cv.clientWidth; drawGraph(cv, syls, last); } }).observe(cv); }
     $('[data-native]', ctlHost).onclick = () => say(nativeText);
     mine.onclick = () => { if (audio) { audio.currentTime = 0; audio.play().catch(() => {}); } };
     rec.onclick = async () => {
       if (recording) { Pitch.stop(); return; }
       if (!Pitch.supported) { msg.textContent = 'This browser cannot record.'; return; }
       TTS.stop(); recording = true; rec.classList.add('rec'); rec.innerHTML = ICON.stop; rec.setAttribute('aria-label', 'Stop recording');
-      msg.textContent = 'Listening… pause to finish.';
+      msg.textContent = 'Listening… pause to finish.'; fb.innerHTML = '';
       try {
         const res = await Pitch.start({ onFrame: fr => drawGraph(cv, syls, null, fr), maxMs: 2500 + syls.length * 700 });
-        const c = contour(res.frames);
-        drawGraph(cv, syls, c);
+        // the speaker's pitch range from earlier recordings makes "high" and "low" mean something even for one syllable
+        const range = store.get('meta', 'pitchRange', null), an = Tones.analyse(res.frames, syls, range);
+        last = an.trk ? an : null;
+        drawGraph(cv, syls, last);
         if (res.url) { audio = new Audio(res.url); mine.disabled = false; }
-        msg.textContent = c ? 'Compare each shape. Then play “Me”.'
-          : res.peak < 0.003 ? 'I could barely hear you. Hold the phone closer and try again.'
+        let f = null;
+        if (an.trk) {
+          store.put('meta', 'pitchRange', Tones.updateRange(range, an.trk));
+          f = toneFeedback(syls, an); fb.innerHTML = f.html;
+          msg.textContent = 'Play “Me” to compare.';
+        } else msg.textContent = res.peak < 0.003 ? 'I could barely hear you. Hold the phone closer and try again.'
           : res.peak < res.noise * 4 ? 'Too much background noise. Try somewhere quieter.'
           : 'No clear pitch. Say it a little slower, with full vowels.';
-        onDone && onDone(c, cv);
+        onDone && onDone(last, f);
       } catch (e) {
         msg.textContent = /Permission|NotAllowed/i.test(e.name + e.message) ? 'Microphone refused — allow it in browser settings.' : 'Microphone error: ' + e.message;
       }
@@ -406,7 +453,7 @@
   function renderShadow(it, host, grade, next) {
     const p = srs.get('shadow', it.id);
     const hide = setting('hideShadow') && p && p.reps >= 1;
-    const T = hanOnly(it.sy);
+    const T = Tones.targetsOf(it.sy);
     host.innerHTML = `<p class="eyebrow">Listen, then say it</p>
       <div data-s style="margin-top:14px">${sentHTML(it.sy, { blur: hide, markNew: true })}</div>
       <p class="en">${esc(it.en)}</p>
@@ -530,15 +577,9 @@
       if (ok) celebrate(ev, host); else missed();
       const notes = syl.map(SANDHI_NOTE).filter(Boolean);
       $('[data-res]', host).innerHTML = `<div class="note fadein"><p><span class="zh">${esc(w.h)}</span> ${esc(fmt(pattern))}: ${esc(w.m)}. ${esc(notes[0] || '')}</p></div>
-        <p class="eyebrow" style="margin-top:22px">Now say it</p><div data-g></div><p class="small" data-guess style="margin:6px 0 0"></p><div data-c></div>`;
-      const T = syl.map(s => ({ c: s.c, s: s.s, t: s.t }));
-      recorder($('[data-g]', host), $('[data-c]', host), T, w.h, cont => {
-        if (!cont) return;
-        const n = T.length, span = cont.t1 - cont.t0, all = cont.pts.map(p => p.st).sort((a, b) => a - b);
-        const range = { lo: all[Math.floor(all.length * .05)], hi: all[Math.floor(all.length * .95)] };
-        const gs = T.map((s, i) => guessTone(cont.pts.filter(p => p.t >= cont.t0 + span * i / n && p.t <= cont.t0 + span * (i + 1) / n), range));
-        $('[data-guess]', host).innerHTML = 'Your tones, roughly: ' + T.map((s, i) => `<b class="zh">${esc(s.c)}</b> ${gs[i] ? TONE_WORD[gs[i]] : '?'}${s.s && gs[i] && gs[i] !== s.s ? ` <span class="muted">(target ${TONE_WORD[s.s]})</span>` : s.s ? ' ✓' : ''}`).join(' · ');
-      });
+        <p class="eyebrow" style="margin-top:22px">Now say it</p><div data-g></div><div data-c></div>`;
+      const T = syl.map((s, i) => ({ c: s.c, s: s.s, t: s.t, final: i === syl.length - 1 }));
+      recorder($('[data-g]', host), $('[data-c]', host), T, w.h);
       host.insertAdjacentHTML('beforeend', contBtn()); $('[data-next]', host).onclick = next;
     });
     if (setting('autoplay')) say(w.h);
