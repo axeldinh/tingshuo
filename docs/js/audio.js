@@ -174,7 +174,7 @@
   const Pitch = {
     supported: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && (global.AudioContext || global.webkitAudioContext)),
     ctx: null, stream: null,
-    /** Record until a pause (or stop()). Resolves to { frames, blob, url, peak, noise, lost }. onStart() once frames flow. */
+    /** Record until a pause (or stop()). Resolves to { frames, blob, url, peak, noise, lost }. onStart(t) once there is a signal. */
     async start({ onFrame, onStart, maxMs = 9000, autoStop = true } = {}) {
       this.ctx = this.ctx || new (global.AudioContext || global.webkitAudioContext)();
       if (this.ctx.state === 'suspended') await this.ctx.resume();
@@ -188,7 +188,7 @@
       try {
         if (global.MediaRecorder) { rec = new MediaRecorder(this.stream); rec.ondataavailable = e => e.data.size && chunks.push(e.data); rec.start(); }
       } catch (e) { rec = null; }
-      let voicedSeen = false, lastVoice = 0, stopped = false, lost = false, mutedN = 0, deadN = 0;
+      let voicedSeen = false, lastVoice = 0, stopped = false, lost = false, mutedN = 0, deadN = 0, signal = false;
       // the microphone taken away mid-recording (another app, or speech recognition on some phones)
       const track = this.stream.getAudioTracks()[0];
       if (track) track.onended = () => { lost = true; };
@@ -204,13 +204,14 @@
           an.getFloatTimeDomainData(raw);
           const f = fa.frame(raw, performance.now() - t0);
           frames.push(f);
-          if (frames.length === 1 && onStart) try { onStart(f.t); } catch (e) {}
+          // onStart once the microphone gives a signal (some give exact zeros for a moment when they open)
+          if (!signal && f.rms >= 1e-7) { signal = true; if (onStart) try { onStart(f.t); } catch (e) {} }
           if (f.f0) { voicedSeen = true; lastVoice = f.t; }
           onFrame && onFrame(frames);
           // muted for half a second; or digital silence (no working microphone gives exact zeros) before any voice
           mutedN = track && track.muted ? mutedN + 1 : 0; deadN = f.rms < 1e-7 ? deadN + 1 : 0;
           if (mutedN > 15) lost = true;
-          if (deadN > 20 && !voicedSeen) finish();
+          if (deadN > 20 && signal && !voicedSeen) finish();
           if (lost || f.t > maxMs || (autoStop && voicedSeen && f.t - lastVoice > 1300)) finish();
         }, 33);
       });
@@ -229,11 +230,12 @@
    *    | 'unknown' (nothing to learn: no voice, no internet…)
    */
   function sharedVerdict({ frames = [], lost = false, startT = 0, text = null, error = null }) {
+    // startT: the frame where recognition started, the first with a signal (so the microphone worked before it)
     if (lost) return 'fail';
     if (error && /audio-capture|not-allowed|service-not-allowed|language-not-supported/.test(error)) return 'fail';
-    const before = frames.filter(f => f.t < startT), after = frames.filter(f => f.t > startT + 300);
+    const before = frames.filter(f => f.t <= startT), after = frames.filter(f => f.t > startT + 300);
     const dead = after.filter(f => f.rms < 1e-7).length;
-    if (after.length >= 10 && dead / after.length > 0.8 && (!before.length || before.some(f => f.rms >= 1e-7))) return 'fail';
+    if (after.length >= 10 && dead / after.length > 0.8 && before.some(f => f.rms >= 1e-7)) return 'fail';
     if (text && String(text).trim()) return 'ok';
     if (error && error !== 'no-speech' && error !== 'aborted') return 'unknown';
     const voiced = frames.filter(f => f.f0).length;

@@ -10,19 +10,17 @@
  * Attempts (each with what was really said, so the truth is exact):
  *  - real-word:   the app's HSK words recorded by one native speaker (Yue Tan, audio-cmn, CC BY-SA): each word said
  *                 right, and the recording of a near word (closest pinyin, same length) given as the attempt instead.
- *  - tts-sent:    bank sentences from two natural neural voices (sherpa-onnx TTS models, MeloTTS zh_en and Matcha
- *                 zh-baker, a third of the second one pitched down): right, each of the three near-miss distractors
- *                 said instead, one word left out, and one word put in.
- *  - rough-sent:  a lower-quality multi-speaker voice (VITS AISHELL-3, 8 kHz): right and a distractor.
+ *  - tts-sent:    bank sentences from two natural neural text-to-speech voices (a third of the second one pitched
+ *                 down): right, each of the three near-miss distractors said instead, one word left out, one put in.
+ *  - rough-sent:  a lower-quality multi-speaker text-to-speech voice (8 kHz): right and a distractor.
  *  - espeak-sent: espeak-ng from pinyin (robotic): right, a distractor, and the right words with one tone changed.
  * Every clip gets a lead-in and tail, a random level, background noise and Opus at 32 kbit/s (as MediaRecorder),
  * then is trimmed to the speech found by the app's own pitch code, as the app does before transcribing.
  *
  * Needs: ffmpeg, espeak-ng, AUDIO_CMN (audio-cmn/64k), SHERPA (a folder with node_modules/sherpa-onnx-node and the
- * TTS model folders vits-melo-tts-zh_en, matcha-icefall-zh-baker + vocos-22khz-univ.onnx, vits-icefall-zh-aishell3,
- * from the sherpa-onnx GitHub releases), MODEL_DIR (a folder holding Xenova/whisper-<size>, the model files as
- * published on the model hub), TRANSFORMERS_PATH (transformers.node.mjs of @huggingface/transformers 3.7.6),
- * WORD_AUDIO (work folder).
+ * three text-to-speech model folders named below, from the sherpa-onnx GitHub releases; see README, Credits),
+ * MODEL_DIR (a folder holding the speech model's files as published on the model hub, as transcribe.js loads them),
+ * TRANSFORMERS_PATH (transformers.node.mjs of @huggingface/transformers 3.7.6), WORD_AUDIO (work folder).
  */
 'use strict';
 const fs = require('fs'), path = require('path'), cp = require('child_process'), zlib = require('zlib');

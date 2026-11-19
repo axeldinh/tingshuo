@@ -258,7 +258,7 @@
       if (wordPart.length) text += cap(wordPart.length > 1 ? wordPart.slice(0, -1).join(', ') + ' and ' + wordPart[wordPart.length - 1] : wordPart[0]) + '.';
       tonePart.forEach(t => { text += (text ? ' ' : '') + cap(t) + '.'; });
       if (more) text += ` And ${more} more ${more > 1 ? 'things' : 'thing'} to look at in the graph.`;
-      if (wordItems && !slips.length && res) text += ' The other tones matched.';
+      if (wordItems && !slips.length && res) { const rest = W.filter(w => w.tone === 'ok').length; if (rest) text += rest === 1 ? ' The other tone matched.' : ' The other tones matched.'; }
       if (!wordItems && m.checked) text = (single ? 'The word was right. ' : 'Every word was right. ') + text;
     } else {
       const okN = W.filter(w => w.tone === 'ok').length;
@@ -300,8 +300,8 @@
     return 'tones only (no speech recognition here; the download above can check words)';
   }
   const wordSourceText = () => Recognizer.supported && (liveRecord() || {}).state !== 'no'
-    ? 'When you shadow or say a word, speech recognition checks your words during the same recording. Where a phone cannot do that (often iPhone), this small speech model checks them instead.'
-    : 'Your phone cannot check words with speech recognition during the same recording. This small speech model checks them instead, on the phone.';
+    ? 'When you shadow or say a word, speech recognition checks your words in the same recording. Where a phone cannot do that (often iPhone), this speech model checks them instead, on the phone.'
+    : 'This phone cannot check words with speech recognition in the same recording as the melody. This speech model checks them instead, on the phone.';
   // the optional models' files sit in the library's own cache; each can be removed alone
   const MEANING_MODEL = 'Xenova/bge-small-zh-v1.5', TRANSCRIBE_MODEL = 'Xenova/whisper-base';
   async function modelStored(model) {
@@ -1156,7 +1156,7 @@
       ${row('Play audio automatically', sw('autoplay'))}
       ${row('Hide text when shadowing again', sw('hideShadow'))}
       ${row('Understand my own words', meaningOK() ? sw('meaning') : '<span class="small muted">Not available here</span>', `In conversations, a spoken reply in other words is matched by meaning on this phone. One download of about ${MEANING_SIZE.download} MB the next time you open Conversation (${MEANING_SIZE.stored} MB stored), then it works offline. <span data-mstored></span>`)}
-      ${row('Check my words on this phone', transcribeOK() ? sw('words') : '<span class="small muted">Not available here</span>', `${wordSourceText()} One download of about ${TRANSCRIBE_SIZE.download} MB the first time you record (${TRANSCRIBE_SIZE.stored} MB stored), then it works offline; checking takes a second or two after each recording. <span data-wstored></span>`)}
+      ${row('Check my words on this phone', transcribeOK() ? sw('words') : '<span class="small muted">Not available here</span>', `${wordSourceText()} One download of about ${TRANSCRIBE_SIZE.download} MB the first time you record (${TRANSCRIBE_SIZE.stored} MB stored), then it works offline. Checking takes a few seconds after each recording; single syllables are not checked. <span data-wstored></span>`)}
       ${row(`Voice speed <b data-ratev>${setting('rate')}×</b>`, `<input type="range" min="0.5" max="1.2" step="0.05" value="${setting('rate')}" data-rate style="width:45%">`)}
       ${TTS.voices.length ? row('Voice', `<select class="plain" data-voice style="max-width:55%">${TTS.voices.map(v => `<option ${TTS.voice && TTS.voice.name === v.name ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}</select>`) : row('Voice', '<span class="small muted">No Chinese voice found</span>')}
       <button class="linkbtn" data-test>Test the voice</button>
