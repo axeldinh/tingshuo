@@ -387,4 +387,18 @@ t('word check: merged with the tones, a wrong word is not a pass and its tone is
   assert.strictEqual(TN.suggestGrade(m), 3);
   assert.strictEqual(TN.suggestGrade(TN.withWords(T, { syls: T.map(() => ({ verdict: 'ok', heard: 1 })) }, null)), 2, 'no word check: never "easy"');
 });
+t('speech: fillers and an erhua 儿 are not extra words', () => {
+  assert.deepStrictEqual(ZH.compareSpeech(buy.sy, '嗯我买了三本书啊').extra, []);
+  const r = ZH.compareSpeech(S('这儿有很多人。').sy, '这儿有很多人'); assert.deepStrictEqual(r.extra, []); assert.strictEqual(r.score, 1);
+  assert.strictEqual(ZH.compareSpeech(buy.sy, '嗯').syl[0].st, 'miss');
+});
+const Tr = require('../docs/js/transcribe.js');
+t('word check: a difference counts only when the model prefers it to the target, never for one syllable', () => {
+  const c = ZH.compareSpeech(buy.sy, '我买了四本书'), sc = { '我买了三本书': -3, '我买了四本书': -2.5 };
+  assert(Tr.mark(c, sc).syl[3].sure);
+  const d = ZH.compareSpeech(buy.sy, '我买了四本书'); assert(!Tr.mark(d, { '我买了三本书': -2, '我买了四本书': -3 }).syl[3].sure);
+  const w = [{ c: '买', p: 'mǎi', t: 3, s: 3 }], e = ZH.compareSpeech(w, '卖');
+  assert(!Tr.mark(e, { '买': -5, '卖': -1 }).syl[0].sure);
+  assert.deepStrictEqual(Tr.variants(ZH.compareSpeech(buy.sy, '我买三本书的')), ['我买了三本书', '我买三本书', '我买了三本书的']);
+});
 console.log(n, 'tests passed');

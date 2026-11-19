@@ -235,7 +235,7 @@
     // neighbouring syllables with the same problem read as one word: 电视 instead of 电脑
     const runs = st => { const out = []; W.forEach((w, i) => { if (w.word !== st) return; const last = out[out.length - 1]; if (last && last.end === i - 1) { last.end = i; last.c += syls[i].c; last.h += w.heard || ''; } else out.push({ start: i, end: i, c: syls[i].c, h: w.heard || '' }); }); return out; };
     const items = [];
-    const word = syls.length <= 4 && W.some(w => w.word === 'wrong'); // a single word: say it whole (电视 instead of 电脑)
+    const single = WORDSET.has(syls.map(x => x.c).join('')), word = single && W.some(w => w.word === 'wrong'); // a single word: said whole (电视 instead of 电脑)
     if (word) items.push(`you said ${zh(W.map((w, i) => w.word === 'wrong' ? w.heard : w.word === 'miss' ? '' : syls[i].c).join(''))} instead of ${zh(syls.map(x => x.c).join(''))}`);
     else runs('wrong').forEach(r => items.push(`you said ${zh(r.h)} instead of ${zh(r.c)}`));
     if (!word) runs('miss').forEach(r => items.push(`${zh(r.c)} was missing`));
@@ -252,18 +252,19 @@
     const cap = t => t.charAt(0).toUpperCase() + t.slice(1);
     let text = '';
     if (items.length) {
-      const shown = items.slice(0, 3), more = items.length - shown.length;
-      // wrong words read as one sentence; each tone slip as its own
-      const wordPart = shown.slice(0, wordItems), tonePart = shown.slice(wordItems);
+      // wrong words read as one sentence, then each tone slip as its own; at most three things, one tone after word problems
+      const wordPart = items.slice(0, Math.min(3, wordItems)), tonePart = items.slice(wordItems, wordItems + Math.max(0, Math.min(wordItems ? 1 : 3, 3 - wordPart.length)));
+      const more = items.length - wordPart.length - tonePart.length;
       if (wordPart.length) text += cap(wordPart.length > 1 ? wordPart.slice(0, -1).join(', ') + ' and ' + wordPart[wordPart.length - 1] : wordPart[0]) + '.';
       tonePart.forEach(t => { text += (text ? ' ' : '') + cap(t) + '.'; });
       if (more) text += ` And ${more} more ${more > 1 ? 'things' : 'thing'} to look at in the graph.`;
       if (wordItems && !slips.length && res) text += ' The other tones matched.';
-      if (!wordItems && m.checked) text = 'Every word was right. ' + text;
+      if (!wordItems && m.checked) text = (single ? 'The word was right. ' : 'Every word was right. ') + text;
     } else {
       const okN = W.filter(w => w.tone === 'ok').length;
-      text = !res ? 'Every word matched.' : !unsure.length ? (m.checked ? 'Every word and every tone matched.' : 'Every tone matched.')
-        : (m.checked ? 'The words were right. ' : '') + `${okN} of ${res.length} tones matched.`;
+      const right = single ? 'The word was right.' : 'The words were right.';
+      text = !res ? right : !unsure.length ? (m.checked ? (single ? 'The word and its tones matched.' : 'Every word and every tone matched.') : 'Every tone matched.')
+        : (m.checked ? right + ' ' : '') + `${okN} of ${res.length} tones matched.`;
     }
     const list = ix => zh(ix.map(i => syls[i].c).join(' '));
     const unheard = unsure.filter(i => !res[i].p), unclearTone = unsure.filter(i => res[i].p); // (empty without a pitch analysis)
@@ -351,7 +352,9 @@
     mine.onclick = () => { if (audio) { audio.currentTime = 0; audio.play().catch(() => {}); } };
     // the separate check, when no transcript can come with the recording itself
     const wc = $('[data-wcheck]', graphHost);
-    const showFallback = () => { if (wc) wc.hidden = !(Recognizer.supported && !liveOK() && !modelOn()); };
+    // (the on-device model does not check a single syllable: too short for it to tell reliably)
+    const modelHere = () => modelOn() && sy && hanOnly(sy).length > 1;
+    const showFallback = () => { if (wc) wc.hidden = !(Recognizer.supported && !liveOK() && !modelHere()); };
     showFallback();
     if (wc) $('[data-check]', wc).onclick = e => speechCheck(e.target, sy, r => { show(last, allSure(r), 'fallback'); if (item) logSpeech(item, r); });
     function show(an, words, source) {
@@ -390,7 +393,7 @@
           store.put('meta', 'pitchRange', Tones.updateRange(range, an.trk));
           msg.textContent = 'Play “Me” to compare.';
           if (heard && heard.text) show(an, recognised(sy, heard.text), 'live');
-          else if (sy && modelOn() && res.blob) {
+          else if (modelHere() && res.blob) {
             show(an, null, null);
             msg.textContent = 'Checking your words…';
             let words = null; try { words = await modelWords(sy, res.blob, res.frames); } catch (e) { words = null; }
@@ -413,7 +416,7 @@
     rec.onclick = () => {
       if (recording) { Pitch.stop(); return; }
       if (!Pitch.supported) { msg.textContent = 'This browser cannot record.'; return; }
-      if (sy && modelOn()) ensureTranscribe(); // start the download while they speak
+      if (modelHere()) ensureTranscribe(); // start the download while they speak
       record();
     };
   }

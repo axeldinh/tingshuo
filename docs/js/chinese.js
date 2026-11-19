@@ -71,14 +71,16 @@
    * -1 at the start). Fillers (嗯, 啊…) are never counted as extra.
    */
   function compareSpeech(sy, heardText) {
-    const T = targetSyl(sy), H = syllablesOf(heardText);
+    const T = targetSyl(sy), tc = new Set(T.map(x => x.c)), er = sy.some(x => x.er);
+    // 嗯, 啊… said while thinking are not words; an erhua 儿 (这儿) is part of the syllable before
+    const H = syllablesOf(heardText).filter(h => (!FILLER.test(h.c) || tc.has(h.c)) && !(er && h.c === '儿' && !tc.has('儿')));
     const m = T.length, n = H.length;
     const cost = (a, b) => same(a.c, b.c) ? 0 : a.b === b.b ? (a.t === b.t || a.t === 0 || b.t === 0 ? 0.05 : 0.4) : 1;
     const dp = Array.from({ length: m + 1 }, (_, i) => Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)));
     for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
       dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost(T[i - 1], H[j - 1]));
     const res = new Array(m), extra = []; let i = m, j = n;
-    const skip = () => { const b = H[j - 1]; if (!FILLER.test(b.c)) extra.unshift({ ...b, after: i - 1 }); j--; };
+    const skip = () => { extra.unshift({ ...H[j - 1], after: i - 1 }); j--; };
     while (i > 0) {
       if (j > 0 && Math.abs(dp[i][j] - (dp[i - 1][j - 1] + cost(T[i - 1], H[j - 1]))) < 1e-9) {
         const a = T[i - 1], b = H[j - 1];
