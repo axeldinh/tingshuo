@@ -3,7 +3,7 @@
   'use strict';
   const store = createStore();
   const srs = createSRS(store);
-  const { TTS, Recognizer, Pitch } = window.Audio2;
+  const { TTS, Recognizer, Pitch } = window.Audio2, Audio2 = window.Audio2;
   const SENT = window.SENTENCES;
   const WORDS = window.WORDS.filter(w => [...w.h].length <= 4);
   const WORDSET = new Set(window.WORDS.map(w => w.h));
@@ -16,7 +16,7 @@
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   // ---------------- settings & look ----------------
-  const DEFAULTS = { pinyin: 'fade', toneMarks: true, ink: 'auto', texture: true, sounds: true, rate: 0.85, voice: '', autoplay: true, hideShadow: true, size: 12, talkInput: 'tap', meaning: false };
+  const DEFAULTS = { pinyin: 'fade', toneMarks: true, ink: 'auto', texture: true, sounds: true, rate: 0.85, voice: '', autoplay: true, hideShadow: true, size: 12, talkInput: 'tap', meaning: false, words: false };
   const setting = k => store.get('settings', k, DEFAULTS[k]);
   const setSetting = (k, v) => { store.put('settings', k, v); applyLook(); };
   const darkMQ = window.matchMedia ? matchMedia('(prefers-color-scheme: dark)') : null;
@@ -161,30 +161,44 @@
   /**
    * Draws each syllable's target shape in its own slot and, from an analysis (Tones.analyse), the learner's pitch for
    * that syllable inside the same slot, so each part is compared with the right shape. `live` frames: dots while recording.
+   * `m` (Tones.withWords): the word check too. A wrong word's character turns red with what was heard above it, a
+   * missing one is pale with a dash above, an extra syllable is shown as +的 between two slots; their tone is not judged.
    */
-  function drawGraph(canvas, syls, an, live) {
+  function drawGraph(canvas, syls, an, live, m) {
     const dpr = window.devicePixelRatio || 1, W = canvas.clientWidth || 300, H = canvas.clientHeight || 150;
     canvas.width = W * dpr; canvas.height = H * dpr;
     const g = canvas.getContext('2d'); g.scale(dpr, dpr); g.clearRect(0, 0, W, H);
     const css = getComputedStyle(document.documentElement), col = v => css.getPropertyValue(v).trim();
-    const top = an ? 20 : 8, bot = H - 24, y = v => bot - v * (bot - top);
+    const words = m && m.checked, top = an ? 20 : 8, bot = H - (words ? 46 : 24), y = v => bot - v * (bot - top);
     const weights = syls.map(x => x.s === 0 ? 0.55 : 1), tw = weights.reduce((a, b) => a + b, 0) || 1;
     let x0 = 6; const xs = weights.map(w => { const a = x0; x0 += w / tw * (W - 12); return [a, x0]; });
     const pad = (a, b) => Math.min(6, (b - a) * 0.15);
-    const res = an && an.syls;
+    const res = an && an.syls, ws = words ? m.syls : null;
+    const offWord = i => ws && (ws[i].word === 'wrong' || ws[i].word === 'miss');
     syls.forEach((s, i) => {
-      const [a, b] = xs[i], p = pad(a, b), r = res && res[i];
+      const [a, b] = xs[i], p = pad(a, b), r = res && res[i], w = ws && ws[i];
+      const verdict = w ? w.tone : r && r.verdict;
       const tone = r && r.verdict === 'ok' && s.alt && s.alt.includes(r.heard) ? r.heard : s.s; // a 3rd tone that may change: the form they used
       let shape = tone === 3 && (s.final || i === syls.length - 1) ? TARGET['3f'] : TARGET[tone];
       if (s.s === 0) { const v = NEUTRAL_Y[i ? syls[i - 1].s : 0]; shape = [[0, v], [1, v - .05]]; }
       g.strokeStyle = col('--rule'); g.lineWidth = 8; g.lineCap = 'round'; g.lineJoin = 'round';
       g.beginPath(); shape.forEach(([px, py], k) => { const X = a + p + px * (b - a - 2 * p), Y = y(py); k ? g.lineTo(X, Y) : g.moveTo(X, Y); }); g.stroke();
-      g.fillStyle = r && r.verdict === 'slip' ? col('--seal') : s.bad ? col('--seal') : col('--ink2'); g.font = `15px ${col('--serif-zh')}`; g.textAlign = 'center';
-      g.fillText(s.c, (a + b) / 2, H - 5);
+      const cx = (a + b) / 2;
+      g.textAlign = 'center';
+      g.fillStyle = w && w.word === 'miss' ? col('--ink3') : (w && w.word === 'wrong') || verdict === 'slip' || s.bad ? col('--seal') : col('--ink2');
+      g.font = `15px ${col('--serif-zh')}`; g.fillText(s.c, cx, H - 5);
+      if (w && w.word === 'wrong' && w.heard) { g.fillStyle = col('--seal'); g.font = `13px ${col('--serif-zh')}`; g.fillText(w.heard, cx, H - 25); }
+      if (w && w.word === 'miss') { g.strokeStyle = col('--seal'); g.lineWidth = 1.6; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(cx - 7, H - 30); g.lineTo(cx + 7, H - 30); g.stroke(); g.setLineDash([]); }
       if (r) {
-        g.font = `600 12px ${col('--sans')}`; g.fillStyle = r.verdict === 'slip' ? col('--seal') : r.verdict === 'ok' ? col('--ok') : col('--ink3');
-        g.fillText(MARK[r.verdict], (a + b) / 2, 12);
+        g.font = `600 12px ${col('--sans')}`;
+        if (offWord(i)) { g.fillStyle = col('--ink3'); g.fillText('–', cx, 12); }
+        else { g.fillStyle = verdict === 'slip' ? col('--seal') : verdict === 'ok' ? col('--ok') : col('--ink3'); g.fillText(MARK[verdict], cx, 12); }
       }
+    });
+    if (words) m.extra.forEach(e => {
+      const X = e.after < 0 ? xs[0][0] + 4 : e.after >= syls.length - 1 ? xs[syls.length - 1][1] - 4 : xs[e.after][1];
+      g.fillStyle = col('--seal'); g.font = `12px ${col('--serif-zh')}`; g.textAlign = e.after < 0 ? 'left' : e.after >= syls.length - 1 ? 'right' : 'center';
+      g.fillText('+' + e.c, X, H - 25);
     });
     if (live && live.length) {
       const pts = live.filter(f => f.f0);
@@ -202,7 +216,8 @@
       res.forEach((r, i) => {
         const P = r.pts; if (!P || P.length < 2) return;
         const [a, b] = xs[i], p = pad(a, b), t0 = P[0].t, T = Math.max(1, P[P.length - 1].t - t0);
-        g.strokeStyle = r.verdict === 'slip' ? col('--seal') : col('--ink');
+        const verdict = ws ? ws[i].tone : r.verdict;
+        g.strokeStyle = offWord(i) ? col('--ink3') : verdict === 'slip' ? col('--seal') : col('--ink');
         g.beginPath(); P.forEach((q, k) => { const X = a + p + (q.t - t0) / T * (b - a - 2 * p); k ? g.lineTo(X, Y(q.st)) : g.moveTo(X, Y(q.st)); }); g.stroke();
       });
     }
@@ -211,65 +226,195 @@
   // ---------------- tone feedback in plain words ----------------
   const HEARD = { 1: 'high and level', 2: 'rising', 3: 'low', 4: 'falling' };
   const SHOULD = (s, final) => s.s === 0 ? 'be light and short' : s.s === 3 ? (s.alt ? 'dip or rise' : final ? 'dip low and come back up' : 'stay low') : { 1: 'stay high and level', 2: 'rise', 4: 'fall' }[s.s];
-  /** Feedback for one analysed recording: what each slipped syllable sounded like, and which ones were unclear. */
-  function toneFeedback(syls, an) {
-    const res = an.syls, slips = [], unsure = [];
-    res.forEach((r, i) => { if (r.verdict === 'slip') slips.push(i); else if (r.verdict === 'unsure') unsure.push(i); });
-    const okN = res.filter(r => r.verdict === 'ok').length;
-    const parts = slips.map(i => {
-      const s = syls[i], fin = s.final || i === syls.length - 1, h = res[i].heard;
-      const heard = h === 3 && fin ? 'dipped' : h === 0 ? 'light' : HEARD[h];
-      const why = s.t != null && s.t !== s.s ? ` (${s.c} changes tone here)` : '';
-      return `<span class="zh">${esc(s.c)}</span> sounded ${heard}; it should ${SHOULD(s, fin)}${why}.`;
+  /**
+   * Feedback for one take, in one short paragraph, most important first: wrong words, missing and extra ones, then
+   * the tones of the words that were right, then what was unclear. m: Tones.withWords (words may be unchecked).
+   */
+  function takeFeedback(syls, an, m) {
+    const res = an ? an.syls : null, W = m.syls, zh = t => `<span class="zh">${esc(t)}</span>`;
+    // neighbouring syllables with the same problem read as one word: 电视 instead of 电脑
+    const runs = st => { const out = []; W.forEach((w, i) => { if (w.word !== st) return; const last = out[out.length - 1]; if (last && last.end === i - 1) { last.end = i; last.c += syls[i].c; last.h += w.heard || ''; } else out.push({ start: i, end: i, c: syls[i].c, h: w.heard || '' }); }); return out; };
+    const items = [];
+    const word = syls.length <= 4 && W.some(w => w.word === 'wrong'); // a single word: say it whole (电视 instead of 电脑)
+    if (word) items.push(`you said ${zh(W.map((w, i) => w.word === 'wrong' ? w.heard : w.word === 'miss' ? '' : syls[i].c).join(''))} instead of ${zh(syls.map(x => x.c).join(''))}`);
+    else runs('wrong').forEach(r => items.push(`you said ${zh(r.h)} instead of ${zh(r.c)}`));
+    if (!word) runs('miss').forEach(r => items.push(`${zh(r.c)} was missing`));
+    m.extra.forEach(e => items.push(`there was an extra ${zh(e.c)}`));
+    const wordItems = items.length;
+    const slips = [], unsure = [];
+    if (res) W.forEach((w, i) => { if (w.tone === 'slip') slips.push(i); else if (w.tone === 'unsure' && w.word !== 'wrong' && w.word !== 'miss') unsure.push(i); });
+    slips.forEach(i => {
+      const s = syls[i], fin = s.final || i === syls.length - 1, h = W[i].toneHeard;
+      const heard = W[i].word === 'tone' && W[i].heard ? `like ${zh(W[i].heard)}` : h === 3 && fin ? 'dipped' : h === 0 ? 'light' : HEARD[h] || 'different';
+      const why = s.t != null && s.t !== s.s ? ` (${esc(s.c)} changes tone here)` : '';
+      items.push(`${zh(s.c)} sounded ${heard}; it should ${SHOULD(s, fin)}${why}`);
     });
-    let head = !slips.length && !unsure.length ? 'Every tone matched.' : !slips.length ? `${okN} of ${res.length} tones matched.` : '';
-    const list = ix => `<span class="zh">${ix.map(i => esc(syls[i].c)).join(' ')}</span>`;
-    const unheard = unsure.filter(i => !res[i].p), unclearTone = unsure.filter(i => res[i].p);
-    let unclear = (unheard.length ? ` I couldn't hear ${list(unheard)} clearly.` : '') + (unclearTone.length ? ` I'm not sure about the tone of ${list(unclearTone)}.` : '');
-    if (unsure.length === res.length) unclear += ' Try again a little slower, a bit closer to the phone.';
-    return { html: `<div class="note fadein"><p>${head}${head && parts.length ? ' ' : ''}${parts.join(' ')}${unclear}</p></div>`, slips: slips.length, unsure: unsure.length, ok: okN };
+    const cap = t => t.charAt(0).toUpperCase() + t.slice(1);
+    let text = '';
+    if (items.length) {
+      const shown = items.slice(0, 3), more = items.length - shown.length;
+      // wrong words read as one sentence; each tone slip as its own
+      const wordPart = shown.slice(0, wordItems), tonePart = shown.slice(wordItems);
+      if (wordPart.length) text += cap(wordPart.length > 1 ? wordPart.slice(0, -1).join(', ') + ' and ' + wordPart[wordPart.length - 1] : wordPart[0]) + '.';
+      tonePart.forEach(t => { text += (text ? ' ' : '') + cap(t) + '.'; });
+      if (more) text += ` And ${more} more ${more > 1 ? 'things' : 'thing'} to look at in the graph.`;
+      if (wordItems && !slips.length && res) text += ' The other tones matched.';
+      if (!wordItems && m.checked) text = 'Every word was right. ' + text;
+    } else {
+      const okN = W.filter(w => w.tone === 'ok').length;
+      text = !res ? 'Every word matched.' : !unsure.length ? (m.checked ? 'Every word and every tone matched.' : 'Every tone matched.')
+        : (m.checked ? 'The words were right. ' : '') + `${okN} of ${res.length} tones matched.`;
+    }
+    const list = ix => zh(ix.map(i => syls[i].c).join(' '));
+    const unheard = unsure.filter(i => !res[i].p), unclearTone = unsure.filter(i => res[i].p); // (empty without a pitch analysis)
+    if (!wordItems) text += (unheard.length ? ` I couldn't hear ${list(unheard)} clearly.` : '') + (unclearTone.length ? ` I'm not sure about the tone of ${list(unclearTone)}.` : '');
+    const doubt = W.map((w, i) => w.word === 'unsure' ? i : -1).filter(i => i >= 0);
+    if (doubt.length && !wordItems) text += ` I'm not sure I heard ${list(doubt)} right.`;
+    if (res && unsure.length === res.length && !wordItems) text += ' Try again a little slower, a bit closer to the phone.';
+    return { html: `<div class="note fadein"><p>${text}</p></div>`, slips: slips.length, unsure: unsure.length, ok: W.filter(w => w.tone === 'ok').length };
   }
 
-  /** Graph + record/play controls. host gets the graph; controls go into ctlHost. onDone(analysis, feedback) after each take. */
-  function recorder(graphHost, ctlHost, syls, nativeText, onDone) {
-    graphHost.innerHTML = `<div class="graphcard"><canvas class="graph"></canvas>
+  // ---------------- word check for the pitch recorder ----------------
+  // Where a take's transcript comes from, in order: the browser's speech recognition running alongside the pitch capture
+  // (where this device can share the microphone; learned per device in `meta` `liveWords`), else the optional
+  // on-device model (transcribe.js, Settings) on the audio just recorded, else a separate "Check my words" recording.
+  const liveRecord = () => store.get('meta', 'liveWords', null);
+  const liveOK = () => Recognizer.supported && (liveRecord() || {}).state !== 'no';
+  const TRANSCRIBE_SIZE = { download: 87, stored: 104 }; // MB, as in transcribe.js (not loaded until needed)
+  const transcribeOK = () => typeof WebAssembly === 'object' && 'caches' in window && !!(window.OfflineAudioContext || window.webkitOfflineAudioContext);
+  const modelOn = () => setting('words') && transcribeOK();
+  let transcribeLoad = null;
+  function ensureTranscribe() {
+    if (!modelOn()) return Promise.resolve(false);
+    if (!transcribeLoad) transcribeLoad = (async () => { await loadScript('js/transcribe.js'); return window.Transcribe.load(); })()
+      .catch(() => false).then(ok => { if (!ok) transcribeLoad = null; return ok; }); // offline on the first try: try again next time
+    return transcribeLoad;
+  }
+  /** Where a recording's words come from on this device right now, in plain words (Settings). */
+  function wordSourceNow() {
+    const r = liveRecord() || {};
+    if (Recognizer.supported && r.state !== 'no') return r.state === 'yes' ? 'words checked by speech recognition at the same time (works on this device)' : 'words checked by speech recognition at the same time (if this device allows it; it is tried on your first recordings)';
+    if (modelOn()) return 'words checked on this phone by the downloaded model';
+    if (Recognizer.supported) return 'this device cannot check words while recording, so use “Check my words” after recording (or turn on the download above)';
+    return 'tones only (no speech recognition here; the download above can check words)';
+  }
+  const wordSourceText = () => Recognizer.supported && (liveRecord() || {}).state !== 'no'
+    ? 'When you shadow or say a word, speech recognition checks your words during the same recording. Where a phone cannot do that (often iPhone), this small speech model checks them instead.'
+    : 'Your phone cannot check words with speech recognition during the same recording. This small speech model checks them instead, on the phone.';
+  // the optional models' files sit in the library's own cache; each can be removed alone
+  const MEANING_MODEL = 'Xenova/bge-small-zh-v1.5', TRANSCRIBE_MODEL = 'Xenova/whisper-base';
+  async function modelStored(model) {
+    if (!('caches' in window) || !(await caches.has('transformers-cache'))) return false;
+    const c = await caches.open('transformers-cache');
+    return (await c.keys()).some(r => r.url.includes('/' + model + '/'));
+  }
+  async function dropModel(model, keepLibrary) {
+    if (!('caches' in window)) return;
+    const c = await caches.open('transformers-cache');
+    for (const r of await c.keys()) if (r.url.includes('/' + model + '/')) await c.delete(r);
+    if (!keepLibrary) { await caches.delete('tingshuo-meaning'); if (!(await c.keys()).length) await caches.delete('transformers-cache'); }
+  }
+  const allSure = cmp => ({ ...cmp, syl: cmp.syl.map(x => ({ ...x, sure: true })), extra: cmp.extra.map(x => ({ ...x, sure: true })) });
+  /** sy: the target's syllable data (sentence `sy`), as compareSpeech expects. */
+  const recognised = (sy, text) => allSure(ZH.compareSpeech(sy, ZH.normalizeHeard(text)));
+  const bestGuess = sy => alts => alts.map((a, i) => [a, ZH.compareSpeech(sy, a).score - i * 0.01]).sort((a, b) => b[1] - a[1])[0][0];
+  /** The recording's speech, with a little margin (frame times are ms from the start of the recording). */
+  function speechSpan(frames) {
+    const trk = Tones.track(frames); if (!trk) return null;
+    return [Math.max(0, trk.sf[0].t - 350), trk.sf[trk.sf.length - 1].t + 400];
+  }
+  async function modelWords(sy, blob, frames) {
+    if (!(await ensureTranscribe())) return null;
+    let x = await window.Transcribe.decodeBlob(blob);
+    const span = speechSpan(frames); if (span) x = x.subarray(Math.floor(span[0] * 16), Math.min(x.length, Math.ceil(span[1] * 16)));
+    return window.Transcribe.check(x, sy, ZH);
+  }
+
+  /**
+   * Graph + record/play controls. host gets the graph; controls go into ctlHost. `sy` (the target's syllable data)
+   * turns on the word check (`item`: its id, for the speech log). onDone(merged, analysis) after each take, and again when a late word check arrives.
+   */
+  function recorder(graphHost, ctlHost, syls, nativeText, onDone, { sy = null, item = null } = {}) {
+    graphHost.innerHTML = `<div class="graphcard"><canvas class="graph${sy ? ' words' : ''}"></canvas>
       <div class="legend"><span><i style="background:var(--rule);height:6px"></i>target</span><span><i style="background:var(--ink)"></i>you</span><span data-msg>Tap the red button and speak.</span></div></div>
-      <div data-tfb></div>`;
+      <div data-tfb></div>${sy ? '<p class="center" data-wcheck hidden style="margin:6px 0 0"><button class="linkbtn" data-check>Check my words</button></p>' : ''}`;
     ctlHost.innerHTML = `<div class="controls">
       <button class="round" data-native aria-label="Play the sentence">${ICON.play}</button>
       <button class="round big" data-rec aria-label="Record yourself">${ICON.mic}</button>
       <button class="round" data-mine aria-label="Play your recording" disabled>Me</button></div>`;
     const cv = $('canvas', graphHost), msg = $('[data-msg]', graphHost), fb = $('[data-tfb]', graphHost), rec = $('[data-rec]', ctlHost), mine = $('[data-mine]', ctlHost);
-    let audio = null, recording = false, last = null;
-    requestAnimationFrame(() => drawGraph(cv, syls));
-    if (window.ResizeObserver) { let w = 0; new ResizeObserver(() => { if (cv.clientWidth !== w && !recording) { w = cv.clientWidth; drawGraph(cv, syls, last); } }).observe(cv); }
+    let audio = null, recording = false, last = null, merged = null, take = 0;
+    const redraw = () => drawGraph(cv, syls, last, null, merged);
+    requestAnimationFrame(redraw);
+    if (window.ResizeObserver) { let w = 0; new ResizeObserver(() => { if (cv.clientWidth !== w && !recording) { w = cv.clientWidth; redraw(); } }).observe(cv); }
     $('[data-native]', ctlHost).onclick = () => say(nativeText);
     mine.onclick = () => { if (audio) { audio.currentTime = 0; audio.play().catch(() => {}); } };
-    rec.onclick = async () => {
-      if (recording) { Pitch.stop(); return; }
-      if (!Pitch.supported) { msg.textContent = 'This browser cannot record.'; return; }
+    // the separate check, when no transcript can come with the recording itself
+    const wc = $('[data-wcheck]', graphHost);
+    const showFallback = () => { if (wc) wc.hidden = !(Recognizer.supported && !liveOK() && !modelOn()); };
+    showFallback();
+    if (wc) $('[data-check]', wc).onclick = e => speechCheck(e.target, sy, r => { show(last, allSure(r), 'fallback'); if (item) logSpeech(item, r); });
+    function show(an, words, source) {
+      merged = Tones.withWords(syls, an, words); merged.source = source;
+      redraw();
+      const f = takeFeedback(syls, an, merged); fb.innerHTML = f.html;
+      onDone && onDone(merged, an, f);
+    }
+    async function record(again) {
+      const my = ++take, live = sy && liveOK();
       TTS.stop(); recording = true; rec.classList.add('rec'); rec.innerHTML = ICON.stop; rec.setAttribute('aria-label', 'Stop recording');
-      msg.textContent = 'Listening… pause to finish.'; fb.innerHTML = '';
+      msg.textContent = again || 'Listening… pause to finish.'; fb.innerHTML = '';
+      let liveP = null, liveT = 0;
       try {
-        const res = await Pitch.start({ onFrame: fr => drawGraph(cv, syls, null, fr), maxMs: 2500 + syls.length * 700 });
+        const res = await Pitch.start({ onFrame: fr => drawGraph(cv, syls, null, fr), maxMs: 2500 + syls.length * 700,
+          onStart: t => { if (!live) return; liveT = t; liveP = Recognizer.listen({ pickBest: bestGuess(sy), silenceMs: 6000, quietMs: 15000, maxMs: 20000 }).then(text => ({ text }), e => ({ error: e.message })); } });
+        let heard = null;
+        if (liveP) {
+          Recognizer.stop();
+          heard = await Promise.race([liveP, new Promise(r => setTimeout(() => r({ error: 'timeout' }), 3000))]);
+          const v = Audio2.sharedVerdict({ frames: res.frames, lost: res.lost, startT: liveT, ...heard });
+          store.put('meta', 'liveWords', Audio2.sharedNext(liveRecord(), v));
+          if (v === 'fail' && (res.lost || !Tones.track(res.frames))) {
+            // the recogniser took the microphone: this take has no melody. Never again on this device; record once more.
+            recording = false; showFallback();
+            return record("This phone can't check words while it records your melody. Say it again, please.");
+          }
+          showFallback();
+        }
         // the speaker's pitch range from earlier recordings makes "high" and "low" mean something even for one syllable
         const range = store.get('meta', 'pitchRange', null), an = Tones.analyse(res.frames, syls, range);
-        last = an.trk ? an : null;
-        drawGraph(cv, syls, last);
+        last = an.trk ? an : null; merged = null;
+        redraw();
         if (res.url) { audio = new Audio(res.url); mine.disabled = false; }
-        let f = null;
         if (an.trk) {
           store.put('meta', 'pitchRange', Tones.updateRange(range, an.trk));
-          f = toneFeedback(syls, an); fb.innerHTML = f.html;
           msg.textContent = 'Play “Me” to compare.';
-        } else msg.textContent = res.peak < 0.003 ? 'I could barely hear you. Hold the phone closer and try again.'
-          : res.peak < res.noise * 4 ? 'Too much background noise. Try somewhere quieter.'
-          : 'No clear pitch. Say it a little slower, with full vowels.';
-        onDone && onDone(last, f);
+          if (heard && heard.text) show(an, recognised(sy, heard.text), 'live');
+          else if (sy && modelOn() && res.blob) {
+            show(an, null, null);
+            msg.textContent = 'Checking your words…';
+            let words = null; try { words = await modelWords(sy, res.blob, res.frames); } catch (e) { words = null; }
+            if (my !== take) return;
+            msg.textContent = words ? 'Play “Me” to compare.' : 'The word check could not run. Play “Me” to compare.';
+            if (words) show(an, words, 'model');
+          } else show(an, null, null);
+        } else {
+          msg.textContent = res.peak < 0.003 ? 'I could barely hear you. Hold the phone closer and try again.'
+            : res.peak < res.noise * 4 ? 'Too much background noise. Try somewhere quieter.'
+            : 'No clear pitch. Say it a little slower, with full vowels.';
+          onDone && onDone(null, an, null);
+        }
       } catch (e) {
+        if (liveP) Recognizer.stop();
         msg.textContent = /Permission|NotAllowed/i.test(e.name + e.message) ? 'Microphone refused — allow it in browser settings.' : 'Microphone error: ' + e.message;
       }
       recording = false; rec.classList.remove('rec'); rec.innerHTML = ICON.mic; rec.setAttribute('aria-label', 'Record again');
+    }
+    rec.onclick = () => {
+      if (recording) { Pitch.stop(); return; }
+      if (!Pitch.supported) { msg.textContent = 'This browser cannot record.'; return; }
+      if (sy && modelOn()) ensureTranscribe(); // start the download while they speak
+      record();
     };
   }
 
@@ -457,26 +602,36 @@
     host.innerHTML = `<p class="eyebrow">Listen, then say it</p>
       <div data-s style="margin-top:14px">${sentHTML(it.sy, { blur: hide, markNew: true })}</div>
       <p class="en">${esc(it.en)}</p>
-      <div data-graph></div><div data-fb></div>
-      <div class="row" style="justify-content:center;gap:4px;margin-top:10px"><button class="linkbtn" data-slow2>Slower</button><span class="muted">·</span><button class="linkbtn" data-check>Check my words</button></div>
+      <div data-graph></div>
+      <div class="row" style="justify-content:center;gap:4px;margin-top:10px"><button class="linkbtn" data-slow2>Slower</button></div>
       <div class="spacer"></div><div data-ctl></div><div data-grades></div>`;
-    let suggest = 2;
+    // the suggested grade follows the last take: a wrong, missing or extra word is not a pass (Tones.suggestGrade)
+    let suggest = 2, details = null;
     const drawGrades = () => {
       $('[data-grades]', host).innerHTML = `<div class="grades">${[['Again', 0], ['Good', 2], ['Easy', 3]].map(([l, q]) => `<button data-q="${q}" class="${q === suggest ? 'sug' : ''}">${l}</button>`).join('')}</div>`;
-      $$('[data-q]', host).forEach(b => b.onclick = ev => { const q = +b.dataset.q; grade(q); if (q >= 2) sfx('ok'); next(); });
+      $$('[data-q]', host).forEach(b => b.onclick = ev => { const q = +b.dataset.q; grade(q, details || undefined); if (q >= 2) sfx('ok'); next(); });
     };
-    recorder($('[data-graph]', host), $('[data-ctl]', host), T, it.zh);
+    recorder($('[data-graph]', host), $('[data-ctl]', host), T, it.zh, m => {
+      if (!m) return;
+      suggest = Tones.suggestGrade(m); details = takeDetails(m);
+      drawGrades();
+      if (m.checked) $('[data-s]', host).innerHTML = sentHTML(it.sy, { status: wordStatus(it.sy, m), pinyin: true });
+      if (m.checked && suggest === 3) celebrate(null, host);
+    }, { sy: it.sy, item: it.id });
     $('[data-slow2]', host).onclick = () => say(it.zh, true);
-    $('[data-check]', host).onclick = e => speechCheck(e.target, it.sy, r => {
-      $('[data-s]', host).innerHTML = sentHTML(it.sy, { status: speechStatus(it.sy, r), pinyin: true });
-      const te = r.syl.filter(s => s.st === 'tone'), wr = r.syl.filter(s => s.st === 'wrong' || s.st === 'miss');
-      $('[data-fb]', host).innerHTML = `<div class="note fadein"><p><b>${Math.round(r.score * 100)}% understood.</b> ${te.map(s => `<span class="zh">${esc(s.c)}</span> came out ${TONE_WORD[s.heard.t]} (${esc(ZH.markTone(s.b, s.heard.t))}); it should ${s.t === 3 ? 'dip' : s.t === 1 ? 'stay high' : s.t === 2 ? 'rise' : s.t === 4 ? 'fall' : 'be light'}.`).join(' ')}${wr.length ? ` Not heard: <span class="zh">${wr.map(s => esc(s.c)).join(' ')}</span>.` : ''}${!te.length && !wr.length ? ' Clean.' : ''}</p></div>`;
-      suggest = r.score >= .95 ? 3 : r.score >= .75 ? 2 : 0; drawGrades();
-      if (r.score >= .95) celebrate(null, host); else if (r.score < .6) missed();
-      logSpeech(it.id, r);
-    });
     drawGrades();
     if (setting('autoplay')) say(it.zh);
+  }
+  /** What a take found, kept with the answer (event log): words wrong, missing or extra, tone slips, and the source. */
+  const takeDetails = m => ({ words: m.checked ? m.source : null, wrong: m.counts.wrong, miss: m.counts.miss, extra: m.counts.extra, slips: m.counts.slips });
+  /** Syllable marks for a combined check, as sentHTML's `status`: the heard character under a wrong one. */
+  function wordStatus(sy, m) {
+    const status = {}, idx = sy.map((x, i) => x.p && !x.er ? i : -1).filter(i => i >= 0);
+    m.syls.forEach((w, k) => {
+      const st = w.word === 'wrong' ? 'wrong' : w.word === 'miss' ? 'miss' : w.tone === 'slip' ? 'tone' : w.tone === 'ok' ? 'ok' : null;
+      if (st) status[idx[k]] = { st, label: st === 'ok' ? '✓' : st === 'wrong' ? w.heard || '✗' : st === 'miss' ? '—' : '✗' };
+    });
+    return status;
   }
 
   function renderListen(it, host, grade, next) {
@@ -573,14 +728,22 @@
       const o = sh[+b.dataset.o], ok = key(o) === key(pattern);
       $$('[data-o]', host).forEach((bb, k) => { bb.disabled = true; if (key(sh[k]) === key(pattern)) bb.classList.add('right'); });
       b.classList.add('picked'); $('[data-sent]', host).classList.remove('blur');
-      grade(ok ? 2 : 0, { pattern: key(pattern), said: key(o) });
       if (ok) celebrate(ev, host); else missed();
       const notes = syl.map(SANDHI_NOTE).filter(Boolean);
       $('[data-res]', host).innerHTML = `<div class="note fadein"><p><span class="zh">${esc(w.h)}</span> ${esc(fmt(pattern))}: ${esc(w.m)}. ${esc(notes[0] || '')}</p></div>
         <p class="eyebrow" style="margin-top:22px">Now say it</p><div data-g></div><div data-c></div>`;
       const T = syl.map((s, i) => ({ c: s.c, s: s.s, t: s.t, final: i === syl.length - 1 }));
-      recorder($('[data-g]', host), $('[data-c]', host), T, w.h);
-      host.insertAdjacentHTML('beforeend', contBtn()); $('[data-next]', host).onclick = next;
+      // graded on Continue: tones named right, and when said, said with the right word (a wrong, missing or extra
+      // syllable makes it "nearly", 1); the tones as said are shown but do not lower the grade
+      let said = null;
+      recorder($('[data-g]', host), $('[data-c]', host), T, w.h, m => { if (m) said = m; },
+        { sy: syl.map(s => ({ c: s.c, p: ZH.markTone(s.b, s.t), t: s.t, s: s.s })), item: w.id });
+      host.insertAdjacentHTML('beforeend', contBtn());
+      $('[data-next]', host).onclick = () => {
+        const bad = said && said.checked && said.counts.wrong + said.counts.miss + said.counts.extra > 0;
+        grade(!ok ? 0 : bad ? 1 : 2, { pattern: key(pattern), said: key(o), ...(said ? takeDetails(said) : {}) });
+        next();
+      };
     });
     if (setting('autoplay')) say(w.h);
   }
@@ -990,6 +1153,7 @@
       ${row('Play audio automatically', sw('autoplay'))}
       ${row('Hide text when shadowing again', sw('hideShadow'))}
       ${row('Understand my own words', meaningOK() ? sw('meaning') : '<span class="small muted">Not available here</span>', `In conversations, a spoken reply in other words is matched by meaning on this phone. One download of about ${MEANING_SIZE.download} MB the next time you open Conversation (${MEANING_SIZE.stored} MB stored), then it works offline. <span data-mstored></span>`)}
+      ${row('Check my words on this phone', transcribeOK() ? sw('words') : '<span class="small muted">Not available here</span>', `${wordSourceText()} One download of about ${TRANSCRIBE_SIZE.download} MB the first time you record (${TRANSCRIBE_SIZE.stored} MB stored), then it works offline; checking takes a second or two after each recording. <span data-wstored></span>`)}
       ${row(`Voice speed <b data-ratev>${setting('rate')}×</b>`, `<input type="range" min="0.5" max="1.2" step="0.05" value="${setting('rate')}" data-rate style="width:45%">`)}
       ${TTS.voices.length ? row('Voice', `<select class="plain" data-voice style="max-width:55%">${TTS.voices.map(v => `<option ${TTS.voice && TTS.voice.name === v.name ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}</select>`) : row('Voice', '<span class="small muted">No Chinese voice found</span>')}
       <button class="linkbtn" data-test>Test the voice</button>
@@ -1001,20 +1165,26 @@
       <div class="gap"></div><textarea data-code placeholder="Paste a backup code here"></textarea>
       <button class="btn small" data-import style="margin-top:8px">Merge pasted code</button>
       <p class="eyebrow" style="margin-top:22px">This device</p>
-      <p class="small muted">Chinese voice ${TTS.voices.length ? '✓' : '✗'} · Word checking ${Recognizer.supported ? '✓' : '✗'} · Microphone ${Pitch.supported ? '✓' : '✗'}</p>
+      <p class="small muted">Chinese voice ${TTS.voices.length ? '✓' : '✗'} · Word checking ${Recognizer.supported ? '✓' : '✗'} · Microphone ${Pitch.supported ? '✓' : '✗'}<br>When you record: ${esc(wordSourceNow())}</p>
       <button class="btn small" data-reset>Reset all progress</button>
       <p class="tiny muted center" style="margin-top:22px">${SENT.length} sentences · ${window.WORDS.length} words · stroke data © Arphic (APL)</p>`;
     wireSegs(view);
     $$('[data-sw]').forEach(b => b.onclick = () => { const v = !setting(b.dataset.sw); setSetting(b.dataset.sw, v); b.setAttribute('aria-checked', v); if (v && b.dataset.sw === 'sounds') sfx('ok'); });
-    // the meaning model's files, once downloaded, can be removed here
-    if ('caches' in window) caches.has('transformers-cache').then(has => {
-      const el = $('[data-mstored]'); if (!has || !el) return;
-      el.innerHTML = '<button class="linkbtn" data-mremove style="padding:4px 0">Remove the download</button>';
-      $('[data-mremove]').onclick = async () => {
-        setSetting('meaning', false); Dialogue.useMeaning(null); meaningLoad = null;
-        if (window.Meaning) await window.Meaning.remove(); else for (const k of ['transformers-cache', 'tingshuo-meaning']) await caches.delete(k);
-        toast('Removed'); viewSettings();
-      };
+    // each optional model's files, once downloaded, can be removed here (the library they share goes with the last one)
+    const removable = (sel, model, off) => modelStored(model).then(has => {
+      const el = $(sel); if (!has || !el) return;
+      el.innerHTML = '<button class="linkbtn" style="padding:4px 0">Remove the download</button>';
+      $('button', el).onclick = async () => { await off(); toast('Removed'); viewSettings(); };
+    });
+    removable('[data-mstored]', MEANING_MODEL, async () => {
+      setSetting('meaning', false); Dialogue.useMeaning(null); meaningLoad = null;
+      if (window.Meaning) window.Meaning.remove && (await window.Meaning.remove({ keepLibrary: await modelStored(TRANSCRIBE_MODEL) }));
+      else await dropModel(MEANING_MODEL, await modelStored(TRANSCRIBE_MODEL));
+    });
+    removable('[data-wstored]', TRANSCRIBE_MODEL, async () => {
+      setSetting('words', false); transcribeLoad = null;
+      if (window.Transcribe) await window.Transcribe.remove({ keepLibrary: await modelStored(MEANING_MODEL) });
+      else await dropModel(TRANSCRIBE_MODEL, await modelStored(MEANING_MODEL));
     });
     $('[data-size]').onchange = e => setSetting('size', +e.target.value);
     $$('[data-lv]').forEach(el => el.onchange = () => srs.setLevel(el.dataset.lv, +el.value));

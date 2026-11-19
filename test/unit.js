@@ -332,4 +332,59 @@ t('tones: sentence targets mark phrase ends and 3rd tones that may change', () =
   assert.strictEqual(T.filter(x => x.final).length, 2); assert(T[T.findIndex(x => x.c === '了')].final);
   assert(TN.targetsOf(S('这儿有很多人。').sy).find(x => x.c === '有').alt.includes(2));
 });
+// word check: one recording, two checks
+t('speech: extra syllables are reported, fillers are not', () => {
+  const r = ZH.compareSpeech(buy.sy, '嗯我也买了三本书');
+  assert.deepStrictEqual(r.extra.map(e => [e.c, e.after]), [['也', 0]]);
+  assert.strictEqual(r.score, 1);
+  assert.deepStrictEqual(ZH.compareSpeech(buy.sy, '我买了三本书的').extra.map(e => [e.c, e.after]), [['的', 5]]);
+});
+t('speech: a different word is wrong, with what was heard', () => {
+  const r = ZH.compareSpeech(buy.sy, '我买了三本画'); const e = r.syl[5];
+  assert.strictEqual(e.st, 'wrong'); assert.strictEqual(e.heard.c, '画');
+});
+const fr = (n, f) => Array.from({ length: n }, (_, i) => ({ t: i * 33, ...f(i) }));
+t('word check: recognition alongside the pitch recording is judged per take', () => {
+  const voiced = fr(60, i => ({ rms: 0.02, f0: i > 10 && i < 40 ? 200 : null }));
+  assert.strictEqual(A2.sharedVerdict({ frames: voiced, startT: 50, text: '我买了三本书' }), 'ok');
+  assert.strictEqual(A2.sharedVerdict({ frames: voiced, startT: 50, lost: true, text: '我' }), 'fail');
+  assert.strictEqual(A2.sharedVerdict({ frames: voiced, startT: 50, error: 'audio-capture' }), 'fail');
+  // the recorder goes digitally silent once recognition starts: the microphone was taken
+  const dead = fr(60, i => ({ rms: i < 5 ? 0.01 : 0, f0: null }));
+  assert.strictEqual(A2.sharedVerdict({ frames: dead, startT: 100, text: null, error: 'no-speech' }), 'fail');
+  assert.strictEqual(A2.sharedVerdict({ frames: voiced, startT: 50, text: '', error: 'no-speech' }), 'empty');
+  assert.strictEqual(A2.sharedVerdict({ frames: fr(60, () => ({ rms: 0.001, f0: null })), startT: 50, error: 'no-speech' }), 'unknown');
+  assert.strictEqual(A2.sharedVerdict({ frames: voiced, startT: 50, error: 'network' }), 'unknown');
+});
+t('word check: the device stops trying after a failure or repeated empty results', () => {
+  const run = vs => vs.reduce((r, v) => A2.sharedNext(r, v), null);
+  assert.strictEqual(run(['ok']).state, 'yes');
+  assert.strictEqual(run(['fail']).state, 'no');
+  assert.strictEqual(run(['ok', 'fail', 'ok']).state, 'no');
+  assert.strictEqual(run(['empty']).state, 'unknown');
+  assert.strictEqual(run(['empty', 'empty']).state, 'no');
+  assert.strictEqual(run(['ok', 'empty', 'empty']).state, 'yes');
+  assert.strictEqual(run(['ok', 'empty', 'empty', 'empty']).state, 'no');
+  assert.strictEqual(run(['ok', 'empty', 'ok', 'empty', 'empty']).state, 'yes');
+});
+t('word check: merged with the tones, a wrong word is not a pass and its tone is not trusted', () => {
+  const T = TN.targetsOf(buy.sy), an = { syls: T.map(() => ({ verdict: 'ok', heard: 1 })) };
+  an.syls[1] = { verdict: 'slip', heard: 4 };
+  const sure = c => ({ ...c, syl: c.syl.map(s => ({ ...s, sure: true })), extra: c.extra.map(e => ({ ...e, sure: true })) });
+  let m = TN.withWords(T, an, sure(ZH.compareSpeech(buy.sy, '我卖了三本书')));
+  assert.strictEqual(m.syls[1].word, 'tone'); assert.strictEqual(m.syls[1].tone, 'slip');
+  m = TN.withWords(T, { syls: T.map(() => ({ verdict: 'ok', heard: 1 })) }, sure(ZH.compareSpeech(buy.sy, '我卖了三本书')));
+  assert.strictEqual(m.syls[1].word, 'ok', 'the pitch said the tone was right: it wins');
+  m = TN.withWords(T, an, sure(ZH.compareSpeech(buy.sy, '我看了三本书')));
+  assert.strictEqual(m.syls[1].word, 'wrong'); assert.strictEqual(m.syls[1].heard, '看'); assert.strictEqual(m.syls[1].tone, 'unsure');
+  assert.strictEqual(TN.suggestGrade(m), 0);
+  m = TN.withWords(T, an, sure(ZH.compareSpeech(buy.sy, '我买三本书')));
+  assert.strictEqual(m.syls[2].word, 'miss'); assert.strictEqual(TN.suggestGrade(m), 0);
+  const unsure = ZH.compareSpeech(buy.sy, '我看了三本书'); unsure.syl[1].sure = false;
+  m = TN.withWords(T, { syls: T.map(() => ({ verdict: 'ok', heard: 1 })) }, unsure);
+  assert.strictEqual(m.syls[1].word, 'unsure'); assert.strictEqual(TN.suggestGrade(m), 2, 'a doubtful word: good, not easy');
+  m = TN.withWords(T, { syls: T.map(() => ({ verdict: 'ok', heard: 1 })) }, sure(ZH.compareSpeech(buy.sy, '我买了三本书')));
+  assert.strictEqual(TN.suggestGrade(m), 3);
+  assert.strictEqual(TN.suggestGrade(TN.withWords(T, { syls: T.map(() => ({ verdict: 'ok', heard: 1 })) }, null)), 2, 'no word check: never "easy"');
+});
 console.log(n, 'tests passed');

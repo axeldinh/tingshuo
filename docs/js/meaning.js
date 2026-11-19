@@ -109,10 +109,15 @@
     },
     /** Would judge() accept this? `swapped`: the heard text is a reply with a word swapped, so it must be closer still. */
     accepts(j, swapped) { return !!j && j.sim >= (swapped ? T.frame : T.sim) && j.margin >= T.margin && j.other >= T.other; },
-    /** Forget the downloaded files (Settings). */
-    async remove() {
+    /** Forget the downloaded model files (Settings); the library, shared with transcribe.js, only with `keepLibrary` false. */
+    async remove({ keepLibrary = false } = {}) {
       extractor = null; state = 'off'; vec.clear();
-      if (global.caches) for (const k of CACHES) try { await caches.delete(k); } catch (e) {}
+      if (!global.caches) return;
+      try {
+        const c = await caches.open(CACHES[0]);
+        for (const req of await c.keys()) if (req.url.includes('/' + MODEL + '/')) await c.delete(req);
+        if (!keepLibrary) await caches.delete(CACHES[1]);
+      } catch (e) {}
     },
     /** Rough size of what is stored on this device, in MB (null when unknown). */
     async storedMB() {

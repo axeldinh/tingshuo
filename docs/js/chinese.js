@@ -63,9 +63,12 @@
   }
   const same = (x, y) => x === y || (/[二两]/.test(x) && /[二两]/.test(y)) || (/[他她它]/.test(x) && /[他她它]/.test(y));
 
+  const FILLER = /[嗯啊呃哦唉噢诶欸哎]/;
   /**
    * Compare what the recogniser heard with the target sentence.
-   * Returns one entry per target syllable: ok | tone | wrong | miss.
+   * Returns one entry per target syllable: ok | tone (same syllable, another tone: 买 heard as 卖) | wrong (another
+   * word) | miss, and `extra`: heard syllables that fit nowhere, each with `after` (the target syllable it follows,
+   * -1 at the start). Fillers (嗯, 啊…) are never counted as extra.
    */
   function compareSpeech(sy, heardText) {
     const T = targetSyl(sy), H = syllablesOf(heardText);
@@ -74,7 +77,8 @@
     const dp = Array.from({ length: m + 1 }, (_, i) => Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)));
     for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
       dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost(T[i - 1], H[j - 1]));
-    const res = new Array(m); let i = m, j = n;
+    const res = new Array(m), extra = []; let i = m, j = n;
+    const skip = () => { const b = H[j - 1]; if (!FILLER.test(b.c)) extra.unshift({ ...b, after: i - 1 }); j--; };
     while (i > 0) {
       if (j > 0 && Math.abs(dp[i][j] - (dp[i - 1][j - 1] + cost(T[i - 1], H[j - 1]))) < 1e-9) {
         const a = T[i - 1], b = H[j - 1];
@@ -82,11 +86,12 @@
         if (same(a.c, b.c)) st = 'ok';
         else if (a.b === b.b) st = (a.t === b.t || a.t === 0 || b.t === 0) ? 'ok' : 'tone';
         res[i - 1] = { ...a, st, heard: b }; i--; j--;
-      } else if (j > 0 && dp[i][j] === dp[i][j - 1] + 1) { j--; }
+      } else if (j > 0 && Math.abs(dp[i][j] - (dp[i][j - 1] + 1)) < 1e-9) skip();
       else { res[i - 1] = { ...T[i - 1], st: 'miss' }; i--; }
     }
+    while (j > 0) skip();
     const score = m ? res.filter(r => r.st === 'ok').length / m : 0;
-    return { syl: res, score, heard: heardText };
+    return { syl: res, extra, score, heard: heardText };
   }
 
   /** Normalise typed pinyin: returns toneless string and (if determinable) tone list. */

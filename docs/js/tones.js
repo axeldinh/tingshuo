@@ -263,6 +263,48 @@
     return out;
   }
 
-  global.Tones = { track, segment, evidence, analyse, features, predict, updateRange, reference, targetsOf, CLASSES, SEG, VERDICT };
+  /**
+   * One recording's two checks together: the tone verdicts (analyse) and the word check (a transcript compared with
+   * the target, see ZH.compareSpeech; each difference with `sure` when it can be trusted). Per syllable:
+   *   word: 'ok' | 'tone' (the right syllable heard with another tone: 买 as 卖) | 'wrong' | 'miss' | 'unsure' | null
+   *         (null: no word check), heard: the character heard instead, tone: 'ok' | 'slip' | 'unsure', toneHeard.
+   * A tone verdict is not trusted for a syllable whose word was wrong or missing: it becomes 'unsure'. When the
+   * recogniser heard another tone but the pitch says the tone was right, the pitch wins (a recogniser often picks the
+   * more common of two words that sound alike); when the pitch was unsure, the recogniser's tone is used.
+   * Also: extra (sure extra syllables: { c, after }), and counts { wrong, miss, extra, slips, unsure, n }.
+   */
+  function withWords(syls, an, words) {
+    const res = (an && an.syls) || syls.map(() => ({ verdict: 'unsure', heard: null }));
+    const out = syls.map((s, i) => {
+      const r = res[i] || { verdict: 'unsure' }, w = words && words.syl[i];
+      const o = { word: null, heard: null, tone: r.verdict, toneHeard: r.heard };
+      if (!words) return o;
+      if (!w || w.st === 'ok') { o.word = 'ok'; return o; }
+      if (!w.sure) { o.word = 'unsure'; return o; }
+      o.word = w.st; o.heard = w.heard ? w.heard.c : null;
+      if (w.st === 'wrong' || w.st === 'miss') o.tone = 'unsure';
+      else if (w.st === 'tone') {
+        if (r.verdict === 'ok') { o.word = 'ok'; o.heard = null; }
+        else { o.tone = 'slip'; if (r.verdict !== 'slip') o.toneHeard = w.heard.t; }
+      }
+      return o;
+    });
+    const extra = words ? words.extra.filter(e => e.sure) : [];
+    const n = syls.length, cnt = st => out.filter(o => o.word === st).length;
+    return { syls: out, extra, checked: !!words, counts: { n, wrong: cnt('wrong'), miss: cnt('miss'), extra: extra.length, slips: out.filter(o => o.tone === 'slip').length, doubt: cnt('unsure'), unsure: out.filter(o => o.tone === 'unsure' && o.word !== 'wrong' && o.word !== 'miss').length } };
+  }
+  /**
+   * Suggested grade for a take (0 again, 2 good, 3 easy): a wrong, missing or extra word is not a pass, whatever the
+   * tones; then tone slips; "easy" only when the words were checked and every tone was heard right.
+   */
+  function suggestGrade(m) {
+    const c = m.counts;
+    if (c.wrong + c.miss + c.extra > 0) return 0;
+    if (c.slips >= 2 && c.slips >= c.n / 2) return 0;
+    if (!c.slips && m.checked && !c.doubt && c.unsure <= c.n / 4) return 3;
+    return 2;
+  }
+
+  global.Tones = { track, segment, evidence, analyse, features, predict, updateRange, reference, targetsOf, withWords, suggestGrade, CLASSES, SEG, VERDICT };
   if (typeof module !== 'undefined') module.exports = global.Tones;
 })(typeof window !== 'undefined' ? window : globalThis);

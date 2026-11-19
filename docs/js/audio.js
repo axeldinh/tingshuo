@@ -174,7 +174,8 @@
   const Pitch = {
     supported: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && (global.AudioContext || global.webkitAudioContext)),
     ctx: null, stream: null,
-    async start({ onFrame, maxMs = 9000, autoStop = true } = {}) {
+    /** Record until a pause (or stop()). Resolves to { frames, blob, url, peak, noise, lost }. onStart() once frames flow. */
+    async start({ onFrame, onStart, maxMs = 9000, autoStop = true } = {}) {
       this.ctx = this.ctx || new (global.AudioContext || global.webkitAudioContext)();
       if (this.ctx.state === 'suspended') await this.ctx.resume();
       // Automatic gain keeps quiet phone mics usable; it changes loudness slowly, so the pitch is unaffected.
@@ -187,12 +188,15 @@
       try {
         if (global.MediaRecorder) { rec = new MediaRecorder(this.stream); rec.ondataavailable = e => e.data.size && chunks.push(e.data); rec.start(); }
       } catch (e) { rec = null; }
-      let voicedSeen = false, lastVoice = 0, stopped = false;
+      let voicedSeen = false, lastVoice = 0, stopped = false, lost = false, mutedN = 0;
+      // the microphone taken away mid-recording (another app, or speech recognition on some phones)
+      const track = this.stream.getAudioTracks()[0];
+      if (track) track.onended = () => { lost = true; };
       return new Promise(resolve => {
         const finish = () => {
           if (stopped) return; stopped = true; clearInterval(iv);
-          const done = url => { this.stream.getTracks().forEach(t => t.stop()); resolve({ frames, url, peak: Math.max(0, ...frames.map(f => f.rms)), noise: fa.noise }); };
-          if (rec && rec.state !== 'inactive') { rec.onstop = () => done(chunks.length ? URL.createObjectURL(new Blob(chunks, { type: rec.mimeType || 'audio/webm' })) : null); rec.stop(); }
+          const done = blob => { this.stream.getTracks().forEach(t => t.stop()); resolve({ frames, blob, url: blob ? URL.createObjectURL(blob) : null, peak: Math.max(0, ...frames.map(f => f.rms)), noise: fa.noise, lost }); };
+          if (rec && rec.state !== 'inactive') { rec.onstop = () => done(chunks.length ? new Blob(chunks, { type: rec.mimeType || 'audio/webm' }) : null); rec.stop(); }
           else done(null);
         };
         this._finish = finish;
@@ -200,15 +204,52 @@
           an.getFloatTimeDomainData(raw);
           const f = fa.frame(raw, performance.now() - t0);
           frames.push(f);
+          if (frames.length === 1 && onStart) try { onStart(f.t); } catch (e) {}
           if (f.f0) { voicedSeen = true; lastVoice = f.t; }
           onFrame && onFrame(frames);
-          if (f.t > maxMs || (autoStop && voicedSeen && f.t - lastVoice > 1300)) finish();
+          mutedN = track && track.muted ? mutedN + 1 : 0; if (mutedN > 15) lost = true; // muted for half a second
+          if (lost || f.t > maxMs || (autoStop && voicedSeen && f.t - lastVoice > 1300)) finish();
         }, 33);
       });
     },
     stop() { this._finish && this._finish(); },
   };
 
-  global.Audio2 = { TTS, Recognizer, Pitch, detectPitch, frameAnalyser, _dedupe: dedupe, _candidates: candidates };
+  // ---------------- speech recognition alongside the pitch recording ----------------
+  // Some phones (iPhone, some Android builds) cannot give the microphone to the recogniser and the recorder at once:
+  // the recorder's track is muted or ended, or goes digitally silent, or the recogniser hears nothing although the
+  // recorder heard a voice. One take is judged by sharedVerdict; the device's record (kept in the store, `meta`
+  // `liveWords`) by sharedNext, which stops trying after a clear failure or repeated empty results.
+  /**
+   * take: { frames, lost, startT (ms, when recognition started, on the frames' clock), text (heard, or null), error }
+   * -> 'ok' | 'fail' (the two cannot share the microphone here) | 'empty' (nothing heard although a voice was there)
+   *    | 'unknown' (nothing to learn: no voice, no internet…)
+   */
+  function sharedVerdict({ frames = [], lost = false, startT = 0, text = null, error = null }) {
+    if (lost) return 'fail';
+    if (error && /audio-capture|not-allowed|service-not-allowed|language-not-supported/.test(error)) return 'fail';
+    const before = frames.filter(f => f.t < startT), after = frames.filter(f => f.t > startT + 300);
+    const dead = after.filter(f => f.rms < 1e-7).length;
+    if (after.length >= 15 && dead / after.length > 0.8 && (!before.length || before.some(f => f.rms >= 1e-7))) return 'fail';
+    if (text && String(text).trim()) return 'ok';
+    if (error && error !== 'no-speech' && error !== 'aborted') return 'unknown';
+    const voiced = frames.filter(f => f.f0).length;
+    return voiced >= 10 ? 'empty' : 'unknown';
+  }
+  /** The device's record after one more take. state: 'yes' (works here), 'no' (stop trying), 'unknown'. */
+  function sharedNext(prev, verdict) {
+    const r = { state: 'unknown', ok: 0, empty: 0, ...(prev || {}) };
+    if (r.state === 'no') return r;
+    if (verdict === 'fail') return { ...r, state: 'no', why: 'mic' };
+    if (verdict === 'ok') return { ...r, state: 'yes', ok: r.ok + 1, empty: 0 };
+    if (verdict === 'empty') {
+      const empty = r.empty + 1;
+      // never worked here: two empty takes are enough; worked before: three in a row
+      return { ...r, empty, state: (!r.ok && empty >= 2) || empty >= 3 ? 'no' : r.state, why: 'empty' };
+    }
+    return r;
+  }
+
+  global.Audio2 = { TTS, Recognizer, Pitch, detectPitch, frameAnalyser, sharedVerdict, sharedNext, _dedupe: dedupe, _candidates: candidates };
   if (typeof module !== 'undefined') module.exports = global.Audio2;
 })(typeof window !== 'undefined' ? window : globalThis);
