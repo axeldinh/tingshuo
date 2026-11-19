@@ -19,7 +19,7 @@ engine.reply(state, utterance)    // utterance = { text, via: 'choice' | 'speech
 ```
 `learner` carries level, met words and due items, so an engine can steer toward useful sentences.
 
-## Phase 1: scripted scenes (now)
+## Phase 1: scripted scenes (done)
 - **Content:** `src/dialogues.src.js`, about 12 scenes (4 per HSK level), 6–8 exchanges each: ordering food, buying a ticket, asking the way, meeting someone, at the doctor's, making plans… Each app line has 2–3 acceptable learner replies, each reply leads to the next app line (light branching, rejoining), and each reply has near-miss distractors with a reason, like the sentence bank.
 - **Build:** `tools/build-data.js` also emits `docs/data/dialogues.js` with the same syllable data (pinyin, tone changes, neutral tones) as sentences. The build fails on an unreachable node, a dead end, a loop, a missing gloss or a distractor equal to an accepted reply; characters above the scene's level are a build warning and a failing unit test.
 - **Engine:** `ScriptedEngine` implements the interface.
@@ -27,7 +27,7 @@ engine.reply(state, utterance)    // utterance = { text, via: 'choice' | 'speech
 - **Progress:** each scene line is an item in a `converse` mode, so it is graded and scheduled; words met and characters are credited.
 - **Quality bar:** natural spoken Mandarin (no textbook-isms), every scene playable end to end on a 390 px screen, unit tests for data validity and the engine, a Playwright run through one scene per level.
 
-## Phase 2: understand free speech (now)
+## Phase 2: understand free speech (done, one item open)
 Spoken replies used to be compared syllable by syllable with the scripted wording, and recognition stopped at the first pause, so on a phone many right answers were asked again. Phase 2 makes speech reliable first, then adds meaning.
 
 **Listening** (`audio.js`, `Recognizer.listen`): continuous recognition that waits through pauses. It stops 1.8 s after the last word, on a tap, after 8 s of nothing, or at 15 s. Engines that end at a pause anyway (some phones ignore continuous mode) are restarted while the speaker may still be going; repeated or cumulative results (Android, iOS) are merged; every stretch's alternatives are offered to the matcher. The words heard so far show under the button.

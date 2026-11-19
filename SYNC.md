@@ -3,7 +3,7 @@
 All user data goes through `docs/js/store.js`. No other file reads or writes storage, so sync only needs a small new module plus a backend.
 
 ## Data model
-- **Records**: `{ id, col, v, updatedAt, device, deleted }` in the collections `progress` (one per mode:item), `levels`, `settings` and `meta`. Conflicts resolve as last write wins per record, with the device id as a tie-break. Deletes are tombstones (`deleted: true`), so they sync too.
+- **Records**: `{ id, col, v, updatedAt, device, deleted }` in the collections `progress` (one per mode:item), `levels`, `settings`, `chars` (the character copybook) and `meta` (placement, level-change dates, the learned pitch range); see ARCHITECTURE.md → Storage. Conflicts resolve as last write wins per record, with the device id as a tie-break. Deletes are tombstones (`deleted: true`), so they sync too.
 - **Events**: an append-only log of answers `{ id, t, device, type, mode, item, q, ... }`. Every id is a UUID, so merging is a union.
 - `schema`: bump `SCHEMA_VERSION` and add a function to `MIGRATIONS` whenever the shape changes. `merge()` refuses data from a newer schema.
 
