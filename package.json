@@ -18,8 +18,5 @@
     "hanzi-writer-data": "^2.0.1",
     "pinyin-pro": "^3.29.5"
   },
-  "private": true,
-  "devDependencies": {
-    "puppeteer-core": "^25.17.0"
-  }
+  "private": true
 }
