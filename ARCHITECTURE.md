@@ -1,9 +1,9 @@
 # How Tīngshuō is built
 
-A static web app with no framework and no bundler: GitHub Pages serves `docs/` as is. Content is written by hand in `src/`, turned into data files by a Node build, and everything the learner does is kept on the device.
+A static web app with no framework and no bundler: GitHub Pages serves `docs/` as is. Content is written by hand in `src/`, turned into data files by a Node build, and everything the learner does is kept on the device first, then optionally uploaded to the cloud in the background (SYNC.md).
 
 ```
-src/ (hand-written content) ──npm run build──▶ docs/data/*.js ──▶ docs/js/* (app, in the browser) ──▶ store (localStorage)
+src/ (hand-written content) ──npm run build──▶ docs/data/*.js ──▶ docs/js/* (app, in the browser) ──▶ store (localStorage) ··sync.js··▶ Supabase (optional)
                                                                     ▲
 test/ + tools/ (evaluation data, model training, checks) ───────────┘
 ```
@@ -13,7 +13,8 @@ Each file is a small `'use strict'` module that sets a global and also exports f
 
 | File | Role |
 |---|---|
-| `store.js` | The only place user data is read or written (see *Storage*). Sync-ready: see SYNC.md. |
+| `store.js` | The only place user data is read or written (see *Storage*). Keeps device-only records (`LOCAL_ONLY`) and device bookkeeping (`local()`) out of sync and backup codes. |
+| `sync.js` | Optional cloud backup: uploads changes in the background and brings in other devices' changes (Supabase, plain fetch, email-code sign-in). Off until its `CONFIG` is filled in; see SYNC.md. |
 | `srs.js` | Spaced repetition, session picking, levels, vocabulary coverage (see *Learning rules*). |
 | `chinese.js` | Text: pinyin parsing, typed-answer checking (`checkTyped`), speech-to-syllable comparison (`compareSpeech`: per syllable ok / tone / wrong / miss, plus extra syllables), tone changes (`spokenTones`), recogniser text clean-up. |
 | `audio.js` | Text-to-speech (`TTS`), speech recognition that waits through pauses (`Recognizer`), microphone pitch frames and the recording itself (`Pitch`, `frameAnalyser`, `detectPitch`), and whether recognition can share the microphone with the pitch capture (`sharedVerdict`, `sharedNext`). |
@@ -57,7 +58,7 @@ Vendored libraries: `docs/vendor/pinyin-pro.js`, `docs/vendor/hanzi-writer.min.j
 - **Tone graph** (shadowing and word tones): `Pitch` records frames, `tones.js` finds each syllable (silences, consonant onsets, loudness dips and pitch jumps aligned to expected lengths) and classifies its tone against the tone as really spoken in context, with a confidence; low confidence shows "?" instead of a verdict. The speaker's pitch range is learned across recordings. The graph draws each syllable's pitch under its own target shape.
 
 ## Storage (`store.js`)
-Records `{ id, col, v, updatedAt, device, deleted }` plus an append-only event log; see SYNC.md for merging.
+Records `{ id, col, v, updatedAt, device, deleted }` plus an append-only event log; see SYNC.md for merging. Not synced (they describe the device, not the learner): `settings/voice`, `settings/words`, `settings/meaning`, `meta/liveWords`. `store.local()` holds the sign-in and sync cursor, saved but never synced or exported.
 
 | Collection | Keys | Value |
 |---|---|---|
@@ -73,11 +74,12 @@ Records `{ id, col, v, updatedAt, device, deleted }` plus an append-only event l
 Events: `answer` (mode, item, grade, optional tone/said details and, for shadowing and word tones, what the last take's word check found: `words` source, `wrong`, `miss`, `extra`, `slips`; `probe`), `placement`, `speech`/`toneSpeech` (separate word checks).
 
 ## Tests and checks
-- `npm test`: `test/unit.js` (logic, data validity, learning rules, synthetic pitch, the word check's merge and microphone-sharing rules), `test/speech-eval.js` (523 recogniser outputs, with accuracy floors), `test/tone-eval.js --check` (tone recognition on recorded, espeak and synthetic voices, with floors), `test/word-eval.js --check` (the word check: the on-device model's transcripts and scores of recorded right and wrong attempts, `test/word-transcripts.json.gz`, and recogniser-style written outputs, with floors). About 12 s.
+- `npm test`: `test/unit.js` (logic, data validity, learning rules, synthetic pitch, the word check's merge and microphone-sharing rules), `test/speech-eval.js` (523 recogniser outputs, with accuracy floors), `test/tone-eval.js --check` (tone recognition on recorded, espeak and synthetic voices, with floors), `test/word-eval.js --check` (the word check: the on-device model's transcripts and scores of recorded right and wrong attempts, `test/word-transcripts.json.gz`, and recogniser-style written outputs, with floors), `test/sync.js` (the sync module against a fake Supabase: offline, late uploads, erase, sign-in expiry). About 12 s.
+- `npm run test:schema`: `supabase/schema.sql` on a throwaway local Postgres (`test/supabase/`), also run in CI.
 - CI (`.github/workflows/ci.yml`) runs `npm ci`, `npm test`, then rebuilds and fails if `docs/` differs from what is committed.
 - `npm run coverage`: HSK words without an example sentence. `npm run check:sw`: service-worker version up to date.
 - Dev tools: `tools/embed-replies.js` (meaning-model reply vectors), `tools/tone-data.js` + `tools/tone-espeak.py` (tone evaluation data), `tools/train-tones.js` (tone model, tuning speakers only), `tools/word-data.js` (word-check evaluation: audio outside the repo, transcripts in).
 
 ## Plans
 - CONVERSATIONS.md: conversation phases (scripted scenes and speech done; reply probabilities and open conversation with a model still to do).
-- SYNC.md: adding cloud sync.
+- SYNC.md: cloud backup, how it works and how to turn it on.

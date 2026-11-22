@@ -49,13 +49,13 @@ The app uses your phone's built-in Chinese voice.
 
 ---
 
-## Progress, backup and future sync
-Progress is saved on the device. **Settings → Backup** gives you a code to copy and paste on another device. The code merges data, so nothing is overwritten.
+## Progress, backup and sync
+Progress is saved on the device first, so the app works the same offline. **Settings → Backup** gives you a code to copy and paste on another device. The code merges data, so nothing is overwritten.
 
-The storage layer is built for real sync: see **SYNC.md**.
+**Cloud backup** (optional): once set up, **Settings → Cloud backup** signs in with a code sent by email. Changes then upload in the background when you're online, and a new phone gets everything back on sign-in. It needs a free Supabase project; setup is in **SYNC.md**.
 
 ## How it's built
-See **ARCHITECTURE.md** for the modules, the build, the learning rules, speech and tone processing, what is stored, and the tests. Plans: **CONVERSATIONS.md** (conversations) and **SYNC.md** (cloud sync).
+See **ARCHITECTURE.md** for the modules, the build, the learning rules, speech and tone processing, what is stored, and the tests. Plans: **CONVERSATIONS.md** (conversations) and **SYNC.md** (cloud backup).
 
 ## Editing content
 - Sentences live in `src/sentences.src.js`, one line per sentence:

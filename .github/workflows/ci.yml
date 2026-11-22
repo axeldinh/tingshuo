@@ -9,6 +9,8 @@ jobs:
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npm test
+      - name: Supabase schema (on the runner's Postgres)
+        run: npm run test:schema
       - name: Generated data is up to date
         run: |
           npm run build
