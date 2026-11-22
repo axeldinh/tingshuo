@@ -2,6 +2,7 @@ name: Mobile builds
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     tags: ['v*']
 jobs:
   android:
@@ -16,8 +17,9 @@ jobs:
       - run: npm run cap:sync
       - run: cd android && ./gradlew assembleDebug
       - uses: actions/upload-artifact@v4
-        with: { name: tingshuo-debug-apk, path: android/app/build/outputs/apk/debug/*.apk }
+        with: { name: tingshuo-debug-apk, retention-days: 30, path: android/app/build/outputs/apk/debug/*.apk }
   ios:
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4

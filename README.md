@@ -54,7 +54,7 @@ The same code also ships as native apps through [Capacitor](https://capacitorjs.
 - **Android:** in Android Studio, *Build → Generate Signed Bundle* (AAB) and upload it to Google Play Console (a one-off $25 developer account). Microphone permission is already declared.
 - **iOS:** open `ios/App` in Xcode, set your Team under *Signing & Capabilities*, then *Product → Archive → Distribute* to App Store Connect / TestFlight (Apple Developer Program, $99/year). Microphone and speech-recognition usage texts are already in `Info.plist`.
 - Application id `com.axeldinh.tingshuo` (in `capacitor.config.json`, `android/app/build.gradle`, and the Xcode project): change it before publishing if you want another one.
-- **Actions → Mobile builds** compiles an unsigned debug APK and an iOS simulator build on every `v*` tag or manual run, to catch breakage; it does not publish.
+- **Actions → Mobile builds** compiles an unsigned debug APK and an iOS simulator build for the APK on every push to `main`, and the iOS build on `v*` tags or manual runs, to catch breakage; it does not publish.
 - Not yet checked on real devices: browser speech recognition (the "word check" and voice conversation) is not provided by Android WebView or iOS's embedded web view, so in the store apps those fall back to the on-device word-check download or the typing options. Test shadowing on a phone before submitting.
 
 ---
