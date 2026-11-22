@@ -2,6 +2,7 @@
 (function () {
   'use strict';
   const store = createStore();
+  const sync = window.Sync.createSync(store); // uploads in the background once signed in; see js/sync.js
   const srs = createSRS(store);
   const { TTS, Recognizer, Pitch } = window.Audio2, Audio2 = window.Audio2;
   const SENT = window.SENTENCES;
@@ -1162,8 +1163,9 @@
       <button class="linkbtn" data-test>Test the voice</button>
       <p class="eyebrow" style="margin-top:22px">Levels</p>
       ${Object.entries(MODES).map(([m, M]) => row(M.title, `<select class="plain" data-lv="${m}">${[1, 2, 3].map(l => `<option value="${l}" ${srs.level(m) === l ? 'selected' : ''}>HSK ${l}</option>`).join('')}</select>`)).join('')}
+      ${sync.configured ? `<p class="eyebrow" style="margin-top:22px">Cloud backup</p><div data-sync>${syncHTML()}</div>` : ''}
       <p class="eyebrow" style="margin-top:22px">Backup &amp; move progress</p>
-      <p class="small muted">Progress lives on this device. Copy the code, paste it on the other device: it merges, nothing is lost.</p>
+      <p class="small muted">${sync.configured ? 'Without cloud backup, progress' : 'Progress'} lives on this device. Copy the code, paste it on the other device: it merges, nothing is lost.</p>
       <div class="row"><button class="btn small solid" data-export>Copy backup code</button><button class="btn small" data-dl>Save as file</button></div>
       <div class="gap"></div><textarea data-code placeholder="Paste a backup code here"></textarea>
       <button class="btn small" data-import style="margin-top:8px">Merge pasted code</button>
@@ -1197,9 +1199,57 @@
     $('[data-export]').onclick = async () => { const code = store.exportCode(); try { await navigator.clipboard.writeText(code); toast('Backup code copied'); } catch (e) { $('[data-code]').value = code; $('[data-code]').select(); toast('Copy the code from the box'); } };
     $('[data-dl]').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(store.snapshot())], { type: 'application/json' })); a.download = 'tingshuo-backup-' + new Date().toISOString().slice(0, 10) + '.json'; a.click(); };
     $('[data-import]').onclick = () => { try { const r = store.importCode($('[data-code]').value); toast(`Merged ${r.records} records, ${r.events} answers`); $('[data-code]').value = ''; } catch (e) { toast(e.message); } };
+    wireSync();
     const rb = $('[data-reset]'); let armed = false;
-    rb.onclick = () => { if (!armed) { armed = true; rb.textContent = 'Tap again to erase everything'; rb.classList.add('red'); return; } store.resetAll(); toast('Progress reset'); viewSettings(); };
+    rb.onclick = () => { if (!armed) { armed = true; rb.textContent = sync.signedIn ? 'Tap again to erase everything, here and in the cloud' : 'Tap again to erase everything'; rb.classList.add('red'); return; } store.resetAll(); toast('Progress reset'); viewSettings(); };
   }
+
+  // ---------------- cloud backup (Settings) ----------------
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  function ago(t) {
+    const m = Math.round((Date.now() - t) / 60e3);
+    return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
+  }
+  function syncLine(s) {
+    const waiting = s.pending ? plural(s.pending, 'change') : 'Nothing';
+    const head = `Signed in as ${s.email}.`;
+    if (s.state === 'syncing') return `${head} Syncing…`;
+    if (s.state === 'offline') return `${head} Offline: ${waiting.toLowerCase()} will upload when you're back online.`;
+    if (s.state === 'error') return `${head} Could not sync (${s.error}); it will try again.`;
+    if (s.pending) return `${head} ${plural(s.pending, 'change')} waiting to upload.`;
+    return `${head} ${s.lastOkAt ? `Everything uploaded, ${ago(s.lastOkAt)}.` : 'Not synced yet.'}`;
+  }
+  function syncHTML() {
+    const s = sync.status();
+    if (s.signedIn) return `<p class="small muted" data-sync-line>${esc(syncLine(s))}</p>
+      <div class="row"><button class="btn small" data-sync-now>Sync now</button><button class="btn small" data-sync-out>Sign out</button></div>`;
+    return `<p class="small muted">Progress is saved on this device first and uploaded when you're online, so it survives a lost phone and shows up on your other devices.${s.email ? ' Sign in again to keep uploading.' : ''}</p>
+      <input class="search" type="email" data-sync-email placeholder="Email" value="${esc(s.email)}" autocomplete="email" autocapitalize="off" spellcheck="false" aria-label="Email">
+      <div class="row" style="margin-top:8px"><button class="btn small solid" data-sync-send>Email me a code</button></div>
+      <div data-sync-step2 style="display:none">
+        <input class="search" data-sync-code inputmode="numeric" autocomplete="one-time-code" placeholder="Code from the email" aria-label="Code from the email" style="margin-top:12px">
+        <div class="row" style="margin-top:8px"><button class="btn small solid" data-sync-verify>Sign in</button></div>
+      </div>`;
+  }
+  function wireSync() {
+    const box = $('[data-sync]'); if (!box) return;
+    const redraw = () => { box.innerHTML = syncHTML(); wireSync(); };
+    const busy = async (btn, fn) => { btn.disabled = true; try { await fn(); } catch (e) { toast(e.message); } finally { btn.disabled = false; } };
+    const send = $('[data-sync-send]', box), verify = $('[data-sync-verify]', box);
+    if (send) send.onclick = () => busy(send, async () => {
+      await sync.sendCode($('[data-sync-email]', box).value);
+      $('[data-sync-step2]', box).style.display = ''; $('[data-sync-code]', box).focus(); toast('Code sent: check your email');
+    });
+    if (verify) verify.onclick = () => busy(verify, async () => {
+      const got = await sync.verify($('[data-sync-email]', box).value, $('[data-sync-code]', box).value);
+      redraw();
+      toast(got && got.events ? `Signed in · brought in ${plural(got.events, 'answer')} from your other devices` : 'Signed in · progress will upload in the background');
+    });
+    const now = $('[data-sync-now]', box), out = $('[data-sync-out]', box);
+    if (now) now.onclick = () => busy(now, () => sync.syncNow());
+    if (out) out.onclick = () => { sync.signOut(); redraw(); toast('Signed out · progress stays on this device'); };
+  }
+  sync.onStatus(s => { const line = $('[data-sync-line]'); if (line) line.textContent = syncLine(s); });
 
   // ---------------- routing ----------------
   function route() {
@@ -1222,7 +1272,8 @@
   window.addEventListener('pagehide', () => store.flush());
   document.addEventListener('visibilitychange', () => { if (document.hidden) store.flush(); });
   route();
+  sync.start();
 
-  window.__app = { store, srs, start: (mode, ids) => { const M = MODES[mode]; startSession(M.title, ids.map(id => ({ mode, it: M.pool().find(x => x.id === id) }))); }, chapter: chapterPage, mix: startMix, word: id => viewWord(window.WORDS.find(w => w.id === id)),
+  window.__app = { store, srs, sync, start: (mode, ids) => { const M = MODES[mode]; startSession(M.title, ids.map(id => ({ mode, it: M.pool().find(x => x.id === id) }))); }, chapter: chapterPage, mix: startMix, word: id => viewWord(window.WORDS.find(w => w.id === id)),
     play: (id, hidden) => playScene(SCENES.find(s => s.id === id), hidden), talk: () => talk && { scene: talk.sc.id, node: talk.turn.state.node, end: talk.turn.end } };
 })();

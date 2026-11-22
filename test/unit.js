@@ -47,6 +47,27 @@ t('store: merge two devices (LWW + event union)', () => {
 });
 t('store: backup code round trip', () => { const A = createStore(mem()); A.put('settings', 'rate', .7); const B = createStore(mem()); B.importCode(A.exportCode()); assert.strictEqual(B.get('settings', 'rate'), .7); });
 t('store: changesSince', () => { const A = createStore(mem()); const t0 = Date.now() - 1; A.put('x', '1', 1); assert.strictEqual(A.changesSince(t0).records.length, 1); });
+t('store: device-only records are never sent or taken', () => {
+  const A = createStore(mem()), B = createStore(mem());
+  A.put('settings', 'voice', 'Tingting'); A.put('settings', 'words', true); A.put('meta', 'liveWords', { state: 'no' }); A.put('settings', 'rate', .7);
+  assert.deepStrictEqual(A.changesSince(0).records.map(r => r.id), ['rate']);
+  B.put('settings', 'voice', 'Google'); B.merge(A.snapshot());
+  assert.strictEqual(B.get('settings', 'voice'), 'Google'); assert.strictEqual(B.get('settings', 'words'), undefined); assert.strictEqual(B.get('settings', 'rate'), .7);
+});
+t('store: local() is saved but not synced or exported', () => {
+  const ad = mem(), A = createStore(ad); A.local('sync', { token: 'secret' });
+  assert.deepStrictEqual(createStore(ad).local('sync'), { token: 'secret' });
+  assert(!A.exportCode().includes('secret') && !JSON.stringify(A.changesSince(0)).includes('secret'));
+});
+t('store: reset keeps the device and its local state, and records when', () => {
+  const A = createStore(mem()), dev = A.device; A.put('progress', 'p', 1); A.local('sync', { s: 1 });
+  A.resetAll(); assert.strictEqual(A.device, dev); assert.deepStrictEqual(A.local('sync'), { s: 1 }); assert(A.resetAt > 0); assert.strictEqual(A.get('progress', 'p'), undefined);
+});
+t('store: merge refuses newer data, accepts records as array or map', () => {
+  const A = createStore(mem());
+  assert.throws(() => A.merge({ schema: A.SCHEMA_VERSION + 1, records: [] }), /newer/);
+  assert.deepStrictEqual(A.merge({ schema: 1, records: [{ id: 'a', col: 'x', v: 1, updatedAt: 5, device: 'd' }], events: [{ id: 'e', t: 1 }, { id: 'e', t: 1 }] }), { records: 1, events: 1 });
+});
 t('store: persists across reloads', () => { const ad = mem(); const A = createStore(ad); A.put('progress', 'z', 5); A.flush(); assert.strictEqual(createStore(ad).get('progress', 'z'), 5); });
 t('srs: wrong answer comes back in 10 min, right in a day', () => {
   const st = createStore(mem()), srs = createSRS(st);
