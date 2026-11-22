@@ -47,6 +47,16 @@ The app uses your phone's built-in Chinese voice.
 
 **Which word check you get.** When you record in shadowing or word tones, the app tries, in order: (1) the phone's own speech recognition listening to the same recording as the tone graph. Some phones cannot give the microphone to both at once (iPhones usually, some Android phones); the app notices it on the first recordings (the melody goes silent, or recognition hears nothing while you clearly spoke), asks you to say it once more, and does not try again on that phone. (2) If you turned on **Settings → Check my words on this phone**, a small speech model on the phone transcribes the recording itself (one download of about 87 MB, 104 MB stored, then offline; a second or more of checking after each recording, longer on older phones). It does not judge single syllables (too short for it to tell); a word or sentence is only marked wrong where the model is sure. (3) Otherwise a **Check my words** link below the graph checks your words in a second recording. Settings → This device says which one this phone uses.
 
+## Android and iOS apps (store builds)
+The same code also ships as native apps through [Capacitor](https://capacitorjs.com): the `android/` and `ios/` projects wrap `docs/` (the bundled copy works fully offline; the service worker is skipped inside the apps). The web app and PWA install above are unchanged.
+
+- `npm run cap:sync` builds the data and copies `docs/` into both projects. `npm run cap:android` / `npm run cap:ios` do that and open Android Studio / Xcode (Xcode needs a Mac).
+- **Android:** in Android Studio, *Build → Generate Signed Bundle* (AAB) and upload it to Google Play Console (a one-off $25 developer account). Microphone permission is already declared.
+- **iOS:** open `ios/App` in Xcode, set your Team under *Signing & Capabilities*, then *Product → Archive → Distribute* to App Store Connect / TestFlight (Apple Developer Program, $99/year). Microphone and speech-recognition usage texts are already in `Info.plist`.
+- Application id `com.axeldinh.tingshuo` (in `capacitor.config.json`, `android/app/build.gradle`, and the Xcode project): change it before publishing if you want another one.
+- **Actions → Mobile builds** compiles an unsigned debug APK and an iOS simulator build on every `v*` tag or manual run, to catch breakage; it does not publish.
+- Not yet checked on real devices: browser speech recognition (the "word check" and voice conversation) is not provided by Android WebView or iOS's embedded web view, so in the store apps those fall back to the on-device word-check download or the typing options. Test shadowing on a phone before submitting.
+
 ---
 
 ## Progress, backup and sync

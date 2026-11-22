@@ -1,0 +1,8 @@
+{
+  "appId": "com.axeldinh.tingshuo",
+  "appName": "Tīngshuō",
+  "webDir": "docs",
+  "backgroundColor": "#F4EFE6",
+  "ios": { "contentInset": "never" },
+  "android": { "allowMixedContent": false }
+}
