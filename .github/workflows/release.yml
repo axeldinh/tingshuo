@@ -1,0 +1,29 @@
+# Gate 3 — runs after a merge into main (that is when GitHub Pages starts publishing docs/).
+# It tags the release, then proves the PUBLIC site serves what was released. If it fails, roll back (PIPELINE.md → Rollback).
+name: Release
+on: { push: { branches: [main] } }
+concurrency: { group: release, cancel-in-progress: false }
+permissions: { contents: write }
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Full verification of exactly what is being published
+        run: |
+          RELEASE=1 npm test
+          npm run check:sw
+      - name: Tag and publish release notes (a tag is the rollback point)
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          tag="v$(date -u +%Y.%m.%d)-${{ github.run_number }}"
+          git tag "$tag" && git push origin "$tag"
+          gh release create "$tag" --generate-notes --title "$tag"
+      - name: The live site serves this release (waits up to 10 min for Pages)
+        run: node tools/smoke-live.js https://axeldinh.github.io/tingshuo/ --wait 600

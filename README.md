@@ -55,7 +55,7 @@ Progress is saved on the device. **Settings → Backup** gives you a code to cop
 The storage layer is built for real sync: see **SYNC.md**.
 
 ## How it's built
-See **ARCHITECTURE.md** for the modules, the build, the learning rules, speech and tone processing, what is stored, and the tests. Plans: **CONVERSATIONS.md** (conversations) and **SYNC.md** (cloud sync).
+See **ARCHITECTURE.md** for the modules, the build, the learning rules, speech and tone processing, what is stored, and the tests. Plans: **CONVERSATIONS.md** (conversations) and **SYNC.md** (cloud sync). How changes reach learners without ever losing their progress (branches, gates, release, rollback): **PIPELINE.md**.
 
 ## Editing content
 - Sentences live in `src/sentences.src.js`, one line per sentence:

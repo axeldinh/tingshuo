@@ -74,7 +74,8 @@ Events: `answer` (mode, item, grade, optional tone/said details and, for shadowi
 
 ## Tests and checks
 - `npm test`: `test/unit.js` (logic, data validity, learning rules, synthetic pitch, the word check's merge and microphone-sharing rules), `test/speech-eval.js` (523 recogniser outputs, with accuracy floors), `test/tone-eval.js --check` (tone recognition on recorded, espeak and synthetic voices, with floors), `test/word-eval.js --check` (the word check: the on-device model's transcripts and scores of recorded right and wrong attempts, `test/word-transcripts.json.gz`, and recogniser-style written outputs, with floors). About 12 s.
-- CI (`.github/workflows/ci.yml`) runs `npm ci`, `npm test`, then rebuilds and fails if `docs/` differs from what is committed.
+- `test/compat.js` (also part of `npm test`): the release gates that protect learners' saved data and the offline app (frozen saved-data fixtures in `test/fixtures/`, the ledger of released item ids, service-worker file list). `test/e2e-upgrade.js` (`npm run test:e2e`, needs Playwright) opens the built app in Chromium on those fixtures.
+- CI and release workflows, branches (`dev` → `main`) and gates: see PIPELINE.md.
 - `npm run coverage`: HSK words without an example sentence. `npm run check:sw`: service-worker version up to date.
 - Dev tools: `tools/embed-replies.js` (meaning-model reply vectors), `tools/tone-data.js` + `tools/tone-espeak.py` (tone evaluation data), `tools/train-tones.js` (tone model, tuning speakers only), `tools/word-data.js` (word-check evaluation: audio outside the repo, transcripts in).
 

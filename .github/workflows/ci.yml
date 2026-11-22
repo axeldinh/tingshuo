@@ -1,15 +1,63 @@
+# Gate 1 — runs on every pull request into dev or main, and on every push to them.
+# Required status checks (set in branch protection, see PIPELINE.md): "verify" on dev and main, "promotion" on main.
 name: CI
-on: [push, pull_request]
+on:
+  pull_request: { branches: [dev, main] }
+  push: { branches: [dev, main] }
+concurrency: { group: ci-${{ github.ref }}, cancel-in-progress: true }
+permissions: { contents: read }
+
 jobs:
-  test:
+  verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm }
+        with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - run: npm test
-      - name: Generated data is up to date
+      - name: Logic, content and evaluation tests (includes the release gates in test/compat.js)
+        run: npm test
+      - name: Generated files are up to date (docs/data, sw.js VERSION)
         run: |
           npm run build
-          git diff --exit-code docs/ || (echo "docs/ is stale: run 'npm run build' and commit" && exit 1)
+          git diff --exit-code docs/ || { echo "::error::docs/ is stale: run 'npm run build' and commit the result (on a merge conflict in docs/data or docs/sw.js, never merge by hand: take either side, then run 'npm run build')"; exit 1; }
+      - name: Safety nets only grow (released ids and saved-data fixtures are never edited or deleted)
+        if: github.event_name == 'pull_request'
+        run: |
+          base=origin/${{ github.base_ref }}
+          bad=$(git diff --name-status --diff-filter=MDR "$base"...HEAD -- test/fixtures ':!test/fixtures/released-items.json')
+          [ -z "$bad" ] || { echo "::error::Fixtures are frozen copies of what released apps saved. Add new ones, never change or delete:"; echo "$bad"; exit 1; }
+          if git cat-file -e "$base:test/fixtures/released-items.json" 2>/dev/null; then
+            git show "$base:test/fixtures/released-items.json" > "$RUNNER_TEMP/old-ledger.json"
+            node tools/released-items.js --append-only "$RUNNER_TEMP/old-ledger.json"
+          fi
+      - name: Saved data of earlier releases survives the real app in a real browser
+        run: |
+          npm i --no-save playwright@1.49.1
+          npx playwright install --with-deps chromium
+          CI=1 node test/e2e-upgrade.js
+      - name: Every precached file is served
+        run: |
+          (cd docs && python3 -m http.server 8000 >/dev/null 2>&1 &) ; sleep 2
+          node tools/smoke-live.js http://localhost:8000/
+
+  # Only on pull requests into main: the release gate.
+  promotion:
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Only dev (or a hotfix/* branch) may be released
+        run: |
+          case "${{ github.head_ref }}" in dev|hotfix/*) ;; *) echo "::error::Releases come from dev (or hotfix/* for emergencies), not '${{ github.head_ref }}'"; exit 1;; esac
+      - name: The branch contains everything already released (a hotfix on main must not be undone by the next release)
+        run: git merge-base --is-ancestor origin/main HEAD || { echo "::error::main has commits this branch lacks. Merge main into dev first (see PIPELINE.md → Hotfix)"; exit 1; }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Every item id in this release is recorded in the ledger
+        run: RELEASE=1 node test/compat.js
